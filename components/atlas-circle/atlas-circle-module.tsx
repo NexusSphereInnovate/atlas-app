@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Award, Star, TrendingUp, Users, Zap, Edit3, Save, Plus, X } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
+// formatCurrency used for agent bonus amounts
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui/toast";
 import { Spinner } from "@/components/ui/spinner";
@@ -38,7 +39,7 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
   const { toast } = useToast();
   const [memberTiers, setMemberTiers] = useState<MemberTier[]>([]);
   const [agentRules, setAgentRules] = useState<AgentBonusRule[]>([]);
-  const [clientStats, setClientStats] = useState({ orderCount: 0, totalSpend: 0 });
+  const [clientStats, setClientStats] = useState({ totalPoints: 0 });
   const [agentStats, setAgentStats] = useState({ salesCount: 0, totalRevenue: 0 });
   const [loading, setLoading] = useState(true);
   const [editingRule, setEditingRule] = useState<string | null>(null);
@@ -77,14 +78,12 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
       }
 
       if (isClient) {
-        const { data: orders } = await supabase
-          .from("orders")
-          .select("id, total_amount")
-          .eq("client_id", profile.id)
-          .eq("status", "completed");
+        const { data: entries } = await supabase
+          .from("atlas_circle_entries")
+          .select("amount")
+          .eq("client_id", profile.id);
         setClientStats({
-          orderCount: orders?.length ?? 0,
-          totalSpend: orders?.reduce((s, o) => s + (o.total_amount ?? 0), 0) ?? 0,
+          totalPoints: entries?.reduce((s, e) => s + (e.amount ?? 0), 0) ?? 0,
         });
       }
 
@@ -111,9 +110,7 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
 
   function getCurrentClientTier(tiers: MemberTier[]) {
     const sorted = [...tiers].sort((a, b) => b.sort_order - a.sort_order);
-    return sorted.find(
-      (t) => clientStats.orderCount >= t.min_orders && clientStats.totalSpend >= t.min_spend
-    ) ?? tiers[0];
+    return sorted.find((t) => clientStats.totalPoints >= t.min_orders) ?? tiers[0];
   }
 
   function getCurrentAgentTier(rules: AgentBonusRule[]) {
@@ -229,14 +226,17 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
               <p className="text-xs text-white/30">Membre Atlas Incorporate</p>
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-4">
+            <div className="mt-5 flex items-center gap-4">
               <div>
-                <p className="text-xs text-white/40">Commandes</p>
-                <p className="text-lg font-bold text-white">{clientStats.orderCount}</p>
+                <p className="text-xs text-white/40">Points Circle</p>
+                <p className="text-3xl font-bold text-white">{clientStats.totalPoints}</p>
               </div>
+              <div className="h-10 w-px bg-white/10" />
               <div>
-                <p className="text-xs text-white/40">Total dépensé</p>
-                <p className="text-lg font-bold text-white">{formatCurrency(clientStats.totalSpend)}</p>
+                <p className="text-xs text-white/40">Palier actuel</p>
+                <p className="text-lg font-bold" style={{ color: currentClientTier.color ?? "#fff" }}>
+                  {currentClientTier.tier_name}
+                </p>
               </div>
             </div>
 
@@ -245,18 +245,23 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
                 <div className="flex justify-between text-xs text-white/40 mb-1.5">
                   <span>Vers {nextClientTier.tier_name}</span>
                   <span>
-                    {formatCurrency(Math.max(0, nextClientTier.min_spend - clientStats.totalSpend))} restants
+                    {Math.max(0, nextClientTier.min_orders - clientStats.totalPoints)} point{Math.max(0, nextClientTier.min_orders - clientStats.totalPoints) !== 1 ? "s" : ""} restant{Math.max(0, nextClientTier.min_orders - clientStats.totalPoints) !== 1 ? "s" : ""}
                   </span>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-white/10">
                   <div
                     className="h-full rounded-full transition-all"
                     style={{
-                      width: `${Math.min(100, (clientStats.totalSpend / nextClientTier.min_spend) * 100)}%`,
+                      width: `${Math.min(100, nextClientTier.min_orders > 0 ? (clientStats.totalPoints / nextClientTier.min_orders) * 100 : 100)}%`,
                       background: currentClientTier.color ?? "#6b7280",
                     }}
                   />
                 </div>
+              </div>
+            )}
+            {!nextClientTier && (
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/50 text-center">
+                🏆 Palier maximum atteint
               </div>
             )}
 
@@ -352,7 +357,7 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
                 <p className="font-semibold text-white">{tier.tier_name}</p>
               </div>
               <p className="text-xs text-white/40 mb-2">
-                Dès {tier.min_orders} commande{tier.min_orders !== 1 ? "s" : ""} ou {formatCurrency(tier.min_spend)}
+                Dès {tier.min_orders} point{tier.min_orders !== 1 ? "s" : ""}
               </p>
               <ul className="space-y-1">
                 {tier.benefits?.map((b, i) => (

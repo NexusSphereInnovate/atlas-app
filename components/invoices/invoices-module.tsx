@@ -265,6 +265,19 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
     const { error } = await sb.from("invoices").update(updates).eq("id",id);
     if (error) toast("error", error.message);
     else {
+      if (status === "paid") {
+        const inv = invoices.find(i => i.id === id) ?? selected;
+        if (inv?.client_id) {
+          await sb.from("atlas_circle_entries").insert({
+            client_id: inv.client_id,
+            type: "invoice",
+            amount: 1,
+            label: `Facture ${inv.invoice_number} payée`,
+            ref_id: id,
+            added_by: profile.id,
+          });
+        }
+      }
       toast("success", lang==="fr"?"Statut mis à jour":"Status updated");
       await load();
       if (selected?.id===id) setSelected(s=>s?{...s,status}:s);
@@ -300,7 +313,18 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
       .update({ status: "paid", paid_at: now })
       .eq("id", selected.id);
     if (error) { toast("error", error.message); setUpdatingStatus(null); return; }
-    toast("success", lang==="fr"?"Paiement confirmé ✓":"Payment confirmed ✓");
+
+    // 1 point Atlas Circle par facture payée
+    await sb.from("atlas_circle_entries").insert({
+      client_id: selected.client_id,
+      type: "invoice",
+      amount: 1,
+      label: `Facture ${selected.invoice_number} payée`,
+      ref_id: selected.id,
+      added_by: profile.id,
+    });
+
+    toast("success", lang==="fr"?"Paiement confirmé ✓ (+1 point Circle)":"Payment confirmed ✓ (+1 Circle point)");
     setSelected(s => s ? { ...s, status:"paid", paid_at: now } : s);
     setUpdatingStatus(null);
     await load();
