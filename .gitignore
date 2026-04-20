@@ -34,6 +34,9 @@ yarn-error.log*
 .env*.local
 .env
 
+# PM2 — contient les clés de production, ne jamais committer
+ecosystem.config.js
+
 # vercel
 .vercel
 
