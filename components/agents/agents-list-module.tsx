@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Users, ChevronRight, MessageCircle, UserPlus, Copy, Check, Eye, EyeOff } from "lucide-react";
+import { Plus, Users, MessageCircle, UserPlus, Copy, Check, Eye, EyeOff, Trash2, UserCheck, UserX } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { Avatar } from "@/components/ui/avatar";
@@ -41,6 +41,8 @@ export function AgentsListModule({ profile }: AgentsListModuleProps) {
   const [createForm, setCreateForm] = useState({ firstName: "", lastName: "", email: "", password: "", phone: "" });
   const [creating, setCreating] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   async function load() {
     const supabase = createClient();
@@ -89,6 +91,40 @@ export function AgentsListModule({ profile }: AgentsListModuleProps) {
     await navigator.clipboard.writeText(inviteLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function handleDelete(agent: Agent) {
+    if (!confirm(`Supprimer définitivement ${getFullName(agent)} ? Cette action est irréversible.`)) return;
+    setDeletingId(agent.id);
+    const res = await fetch("/api/admin/delete-user", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: agent.id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      toast("error", data.error ?? "Erreur lors de la suppression");
+    } else {
+      toast("success", "Agent supprimé");
+      load();
+    }
+    setDeletingId(null);
+  }
+
+  async function handleToggleActive(agent: Agent) {
+    setTogglingId(agent.id);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("user_profiles")
+      .update({ is_active: !agent.is_active })
+      .eq("id", agent.id);
+    if (error) {
+      toast("error", error.message);
+    } else {
+      toast("success", `Agent ${!agent.is_active ? "activé" : "désactivé"}`);
+      load();
+    }
+    setTogglingId(null);
   }
 
   async function handleCreate() {
@@ -181,11 +217,38 @@ export function AgentsListModule({ profile }: AgentsListModuleProps) {
                       href={`https://wa.me/${a.phone.replace(/\D/g, "")}`}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
                       className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/12 text-emerald-400 transition-colors hover:bg-emerald-500/25"
                     >
                       <MessageCircle className="h-3.5 w-3.5" />
                     </a>
                   )}
+                  {/* Toggle actif */}
+                  <button
+                    onClick={() => handleToggleActive(a)}
+                    disabled={togglingId === a.id}
+                    title={a.is_active ? "Désactiver" : "Activer"}
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-40",
+                      a.is_active
+                        ? "bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                        : "bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+                    )}
+                  >
+                    {togglingId === a.id
+                      ? <Spinner size="sm" />
+                      : a.is_active ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />
+                    }
+                  </button>
+                  {/* Supprimer */}
+                  <button
+                    onClick={() => handleDelete(a)}
+                    disabled={deletingId === a.id}
+                    title="Supprimer l'agent"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/10 text-red-400 transition-colors hover:bg-red-500/20 disabled:opacity-40"
+                  >
+                    {deletingId === a.id ? <Spinner size="sm" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  </button>
                 </div>
               </li>
             ))}

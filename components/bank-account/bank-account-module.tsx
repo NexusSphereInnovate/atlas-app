@@ -606,6 +606,16 @@ export function BankAccountModule({ profile }: BankAccountModuleProps) {
           />
         </div>
 
+        {/* PIN warning */}
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3">
+          <span className="mt-0.5 text-base leading-none">⚠️</span>
+          <p className="text-xs leading-relaxed text-amber-300/90">
+            {lang === "fr"
+              ? "Ce code secret est uniquement demandé lors de la création du compte. Vous pourrez le modifier à tout moment directement auprès de votre banque une fois le compte ouvert. Ne communiquez jamais ce code à un tiers."
+              : "This secret code is only required during account creation. You can change it at any time directly with your bank once the account is open. Never share this code with anyone."}
+          </p>
+        </div>
+
         {/* PIN */}
         <div>
           <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-white/50">
