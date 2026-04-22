@@ -5,7 +5,7 @@ import {
   FileBadge, Plus, Upload, Eye, CheckCircle, Clock,
   X, User, Calendar, DollarSign, Send, Pen, ArrowLeft,
   ChevronRight, Shield, AlertCircle, FileText, Sparkles,
-  Building2, Trash2,
+  Building2, Trash2, PackagePlus, ChevronDown,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { useCurrency } from "@/lib/contexts/currency-context";
@@ -16,6 +16,25 @@ import { Spinner } from "@/components/ui/spinner";
 import { SignContractModal } from "./sign-contract-modal";
 import type { UserProfile } from "@/types/profile";
 import type { ContractStatus } from "@/types/database";
+
+// ─── Contract services ────────────────────────────────────────────
+interface ContractItem { label: string; quantity: number; unit_price: number; currency: string; }
+
+const CONTRACT_SERVICES: ContractItem[] = [
+  { label: "Création société LTD UK",                            quantity: 1, unit_price: 4500, currency: "CHF" },
+  { label: "Création société LTD UK + Succursale Suisse",        quantity: 1, unit_price: 6500, currency: "CHF" },
+  { label: "Création société LTD UK + Succursale France",        quantity: 1, unit_price: 6000, currency: "CHF" },
+  { label: "Succursale en Suisse (seule)",                       quantity: 1, unit_price: 2500, currency: "CHF" },
+  { label: "Succursale en France (seule)",                       quantity: 1, unit_price: 2000, currency: "CHF" },
+  { label: "Renouvellement mise en conformité UK",               quantity: 1, unit_price: 1200, currency: "CHF" },
+  { label: "Création compte bancaire Revolut Business",          quantity: 1, unit_price: 500,  currency: "CHF" },
+  { label: "Pack comptabilité annuelle UK",                      quantity: 1, unit_price: 1800, currency: "GBP" },
+  { label: "Pack comptabilité + mise en conformité",             quantity: 1, unit_price: 3000, currency: "GBP" },
+  { label: "Dissolution société LTD UK",                        quantity: 1, unit_price: 500,  currency: "CHF" },
+  { label: "Modification de dirigeant",                         quantity: 1, unit_price: 350,  currency: "CHF" },
+  { label: "Changement d'adresse de siège social",              quantity: 1, unit_price: 200,  currency: "CHF" },
+  { label: "Création site internet professionnel",              quantity: 1, unit_price: 1500, currency: "CHF" },
+];
 
 // ─── Types ────────────────────────────────────────────────────────
 interface Contract {
@@ -96,7 +115,12 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
     address: "", city: "", postalCode: "", country: "",
     companyName: "", companyAddress: "",
     pdfMode: "auto" as "auto" | "manual",
+    // Services / items
+    items: [] as ContractItem[],
+    currency: "CHF",
+    clientReferralRate: "5",
   });
+  const [showServicePicker, setShowServicePicker] = useState(false);
   const [creating, setCreating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const stL = lang === "fr" ? STATUS_LABELS_FR : STATUS_LABELS_EN;
@@ -186,12 +210,20 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
     if (contract.pdf_path) {
       await sb.storage.from("contracts").remove([contract.pdf_path]);
     }
-    const { error } = await sb.from("contracts").delete().eq("id", contract.id);
-    if (error) toast("error", error.message);
-    else {
+    const { error, count } = await sb.from("contracts").delete({ count: "exact" }).eq("id", contract.id);
+    if (error) {
+      toast("error", error.message);
+    } else if (count === 0) {
+      // Silently blocked by RLS — migration 014 needed
+      toast("error", lang==="fr"
+        ? "Suppression refusée — exécutez la migration 014 dans Supabase SQL Editor"
+        : "Delete denied — run migration 014 in Supabase SQL Editor");
+    } else {
       toast("success", lang==="fr"?"Contrat supprimé":"Contract deleted");
       if (selected?.id === contract.id) { setSelected(null); setPdfUrl(null); }
-      await load();
+      // Force immediate removal from list without waiting for load()
+      setContracts(prev => prev.filter(c => c.id !== contract.id));
+      load(); // refresh in background
     }
     setDeletingContract(null);
     setConfirmDelete(null);
@@ -223,23 +255,28 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
     if (newContract.pdfMode === "auto") {
       const selectedClient = clients.find(c => c.id === newContract.clientId);
       const today = new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+      const total = newContract.items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
 
       try {
         const res = await fetch("/api/contracts/generate-pdf", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            civility:        newContract.civility,
-            firstName:       selectedClient?.first_name ?? "",
-            lastName:        selectedClient?.last_name  ?? "",
-            address:         newContract.address,
-            postalCode:      newContract.postalCode,
-            city:            newContract.city,
-            country:         newContract.country,
-            companyName:     newContract.companyName  || undefined,
-            companyAddress:  newContract.companyAddress || undefined,
-            contractTitle:   newContract.title,
-            contractDate:    today,
+            civility:           newContract.civility,
+            firstName:          selectedClient?.first_name ?? "",
+            lastName:           selectedClient?.last_name  ?? "",
+            address:            newContract.address,
+            postalCode:         newContract.postalCode,
+            city:               newContract.city,
+            country:            newContract.country,
+            companyName:        newContract.companyName  || undefined,
+            companyAddress:     newContract.companyAddress || undefined,
+            contractTitle:      newContract.title,
+            contractDate:       today,
+            items:              newContract.items,
+            totalAmount:        total,
+            currency:           newContract.currency,
+            clientReferralRate: Number(newContract.clientReferralRate) || 5,
           }),
         });
 
@@ -272,6 +309,8 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
       if (upErr) { toast("error", upErr.message); setCreating(false); return; }
     }
 
+    const totalAmount = newContract.items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+
     const { error } = await sb.from("contracts").insert({
       org_id: profile.org_id ?? "00000000-0000-0000-0000-000000000001",
       title: newContract.title,
@@ -283,6 +322,10 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
       commission_type: newContract.agentId && newContract.commissionValue ? newContract.commissionType : null,
       commission_value: newContract.agentId && newContract.commissionValue ? Number(newContract.commissionValue) : null,
       created_by: profile.id,
+      items: newContract.items,
+      total_amount: totalAmount,
+      contract_currency: newContract.currency,
+      client_referral_rate: Number(newContract.clientReferralRate) || 5,
     });
 
     if (error) toast("error", error.message);
@@ -294,6 +337,7 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
         commissionType:"percentage", commissionValue:"", file:null,
         civility:"M.", address:"", city:"", postalCode:"", country:"",
         companyName:"", companyAddress:"", pdfMode:"auto",
+        items:[], currency:"CHF", clientReferralRate:"5",
       });
       load();
     }
@@ -692,6 +736,132 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
                     onChange={e=>setNewContract(n=>({...n,version:e.target.value}))}
                     placeholder="1.0"
                     className="w-full rounded-xl border border-white/10 bg-[#16161c] px-4 py-2.5 text-sm text-white outline-none focus:border-white/30"/>
+                </div>
+              </div>
+
+              {/* ── Services / Prestations ─────────────────────── */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-medium text-white/50">
+                    {lang==="fr"?"Prestations contractualisées *":"Contract services *"}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <select value={newContract.currency}
+                      onChange={e=>setNewContract(n=>({...n,currency:e.target.value}))}
+                      className="rounded-lg border border-white/10 bg-[#1a1a20] px-2 py-1 text-xs text-white/70 outline-none">
+                      {["CHF","EUR","GBP","USD"].map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Items list */}
+                {newContract.items.length > 0 && (
+                  <div className="mb-2 space-y-1.5">
+                    {newContract.items.map((item, i) => (
+                      <div key={i} className="flex items-center gap-2 rounded-xl border border-white/8 bg-white/3 px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-white truncate">{item.label}</p>
+                          <p className="text-[10px] text-white/40">
+                            {item.quantity} × {item.unit_price.toLocaleString()} {item.currency}
+                          </p>
+                        </div>
+                        <p className="text-xs font-semibold text-white/70 shrink-0">
+                          {(item.unit_price * item.quantity).toLocaleString()} {item.currency}
+                        </p>
+                        <button onClick={()=>setNewContract(n=>({...n,items:n.items.filter((_,idx)=>idx!==i)}))}
+                          className="ml-1 text-white/20 hover:text-red-400">
+                          <X className="h-3.5 w-3.5"/>
+                        </button>
+                      </div>
+                    ))}
+                    {/* Total */}
+                    <div className="flex items-center justify-between rounded-xl bg-blue-600/20 px-3 py-2 border border-blue-500/30">
+                      <p className="text-xs font-semibold text-blue-300">Total TTC</p>
+                      <p className="text-sm font-bold text-white">
+                        {newContract.items.reduce((s,i)=>s+i.unit_price*i.quantity,0).toLocaleString()} {newContract.currency}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Add service button + picker */}
+                <div className="relative">
+                  <button onClick={()=>setShowServicePicker(s=>!s)}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 py-2.5 text-xs text-white/50 transition-colors hover:border-white/40 hover:text-white/70">
+                    <PackagePlus className="h-4 w-4"/>
+                    {lang==="fr"?"Ajouter une prestation":"Add a service"}
+                    <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showServicePicker && "rotate-180")}/>
+                  </button>
+
+                  {showServicePicker && (
+                    <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-52 overflow-y-auto rounded-xl border border-white/10 bg-[#18181f] shadow-2xl">
+                      {CONTRACT_SERVICES.map((svc, i) => (
+                        <button key={i} onClick={()=>{
+                          setNewContract(n=>({ ...n, items: [...n.items, { ...svc, currency: n.currency }] }));
+                          setShowServicePicker(false);
+                        }}
+                          className="flex w-full items-center justify-between px-4 py-2.5 text-left text-xs transition-colors hover:bg-white/6">
+                          <span className="text-white/80">{svc.label}</span>
+                          <span className="ml-4 shrink-0 text-white/40">
+                            {svc.unit_price.toLocaleString()} {newContract.currency}
+                          </span>
+                        </button>
+                      ))}
+                      {/* Custom service */}
+                      <button onClick={()=>{
+                        setNewContract(n=>({...n, items:[...n.items, { label:"Prestation personnalisée", quantity:1, unit_price:0, currency:n.currency }]}));
+                        setShowServicePicker(false);
+                      }}
+                        className="flex w-full items-center gap-2 border-t border-white/8 px-4 py-2.5 text-xs text-blue-400 hover:bg-white/6">
+                        <Plus className="h-3.5 w-3.5"/> {lang==="fr"?"Prestation personnalisée...":"Custom service..."}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Inline edit for last item if price = 0 */}
+                {newContract.items.length > 0 && newContract.items[newContract.items.length-1].unit_price === 0 && (
+                  <div className="mt-2 grid grid-cols-3 gap-2 rounded-xl border border-white/10 bg-white/3 p-3">
+                    <div className="col-span-2">
+                      <label className="mb-1 block text-[10px] text-white/40">{lang==="fr"?"Libellé":"Label"}</label>
+                      <input value={newContract.items[newContract.items.length-1].label}
+                        onChange={e=>{
+                          const items=[...newContract.items];
+                          items[items.length-1]={...items[items.length-1],label:e.target.value};
+                          setNewContract(n=>({...n,items}));
+                        }}
+                        className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-2 py-1.5 text-xs text-white outline-none focus:border-white/30"/>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] text-white/40">{lang==="fr"?"Prix":"Price"}</label>
+                      <input type="number" value={newContract.items[newContract.items.length-1].unit_price||""}
+                        onChange={e=>{
+                          const items=[...newContract.items];
+                          items[items.length-1]={...items[items.length-1],unit_price:Number(e.target.value)};
+                          setNewContract(n=>({...n,items}));
+                        }}
+                        placeholder="0"
+                        className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-2 py-1.5 text-xs text-white outline-none focus:border-white/30"/>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Commission referral client */}
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-white/50">
+                  {lang==="fr"?"Commission recommandation client (%)":"Client referral commission (%)"}
+                </label>
+                <div className="flex items-center gap-2">
+                  <input type="number" min="0" max="100" step="0.5"
+                    value={newContract.clientReferralRate}
+                    onChange={e=>setNewContract(n=>({...n,clientReferralRate:e.target.value}))}
+                    className="w-24 rounded-xl border border-white/10 bg-[#16161c] px-4 py-2.5 text-sm text-white outline-none focus:border-white/30"/>
+                  <p className="text-xs text-white/30">
+                    {lang==="fr"
+                      ?"Versée si le client recommande un nouveau client (Article 6 du contrat)"
+                      :"Paid if client refers a new client (Article 6 of contract)"}
+                  </p>
                 </div>
               </div>
 
