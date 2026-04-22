@@ -46,6 +46,12 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
   const [savingRule, setSavingRule] = useState<string | null>(null);
   const [ruleEdits, setRuleEdits] = useState<Record<string, Partial<AgentBonusRule>>>({});
 
+  // Tier benefits editing (admin only)
+  const [editingTier, setEditingTier] = useState<string | null>(null);
+  const [savingTier, setSavingTier] = useState<string | null>(null);
+  const [tierBenefits, setTierBenefits] = useState<Record<string, string[]>>({});
+  const [tierMinPoints, setTierMinPoints] = useState<Record<string, number>>({});
+
   // Atlas Circle manual add (admin)
   const [circleOpen, setCircleOpen] = useState(false);
   const [circleClients, setCircleClients] = useState<{ id: string; first_name: string | null; last_name: string | null; email: string | null }[]>([]);
@@ -152,6 +158,25 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
     setAddingCircle(false);
   }
 
+  async function saveTier(tierId: string) {
+    setSavingTier(tierId);
+    const supabase = createClient();
+    const benefits = tierBenefits[tierId] ?? memberTiers.find(t => t.id === tierId)?.benefits ?? [];
+    const minOrders = tierMinPoints[tierId] ?? memberTiers.find(t => t.id === tierId)?.min_orders ?? 0;
+    const { error } = await supabase.from("member_tiers").update({
+      benefits,
+      min_orders: minOrders,
+    }).eq("id", tierId);
+    if (error) {
+      toast("error", `Erreur : ${error.message}`);
+    } else {
+      toast("success", "Palier mis à jour");
+      setMemberTiers(prev => prev.map(t => t.id === tierId ? { ...t, benefits, min_orders: minOrders } : t));
+      setEditingTier(null);
+    }
+    setSavingTier(null);
+  }
+
   async function saveRule(ruleId: string) {
     setSavingRule(ruleId);
     const supabase = createClient();
@@ -229,7 +254,8 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
             <div className="mt-5 flex items-center gap-4">
               <div>
                 <p className="text-xs text-white/40">Points Circle</p>
-                <p className="text-3xl font-bold text-white">{clientStats.totalPoints}</p>
+                <p className="text-3xl font-bold text-white">{clientStats.totalPoints.toLocaleString()}</p>
+                <p className="text-[10px] text-white/25 mt-0.5">1 pt = 1 CHF/EUR dépensé</p>
               </div>
               <div className="h-10 w-px bg-white/10" />
               <div>
@@ -245,7 +271,7 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
                 <div className="flex justify-between text-xs text-white/40 mb-1.5">
                   <span>Vers {nextClientTier.tier_name}</span>
                   <span>
-                    {Math.max(0, nextClientTier.min_orders - clientStats.totalPoints)} point{Math.max(0, nextClientTier.min_orders - clientStats.totalPoints) !== 1 ? "s" : ""} restant{Math.max(0, nextClientTier.min_orders - clientStats.totalPoints) !== 1 ? "s" : ""}
+                    {Math.max(0, nextClientTier.min_orders - clientStats.totalPoints).toLocaleString()} CHF/EUR restants
                   </span>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-white/10">
@@ -341,31 +367,126 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
 
       {/* ALL TIERS */}
       <div>
-        <p className="mb-3 text-sm font-semibold text-white">Paliers membres</p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {memberTiers.map((tier) => (
-            <div
-              key={tier.id}
-              className="rounded-2xl border p-4 transition-all"
-              style={{
-                borderColor: `${tier.color ?? "#6b7280"}30`,
-                background: `${tier.color ?? "#6b7280"}0a`,
-              }}
-            >
-              <div className="flex items-center gap-2 mb-3">
-                <div className="h-3 w-3 rounded-full" style={{ background: tier.color ?? "#6b7280" }} />
-                <p className="font-semibold text-white">{tier.tier_name}</p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-semibold text-white">Paliers membres</p>
+          <p className="text-xs text-white/30">1 point = 1 CHF / EUR dépensé</p>
+        </div>
+        <div className="space-y-3">
+          {memberTiers.map((tier) => {
+            const isEditing = editingTier === tier.id;
+            const currentBenefits = tierBenefits[tier.id] ?? tier.benefits ?? [];
+            const currentMinPts   = tierMinPoints[tier.id] ?? tier.min_orders;
+
+            return (
+              <div key={tier.id} className="rounded-2xl border p-4 transition-all"
+                style={{ borderColor: `${tier.color ?? "#6b7280"}30`, background: `${tier.color ?? "#6b7280"}0a` }}>
+
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="h-3 w-3 rounded-full shrink-0" style={{ background: tier.color ?? "#6b7280" }} />
+                      <p className="font-semibold text-white">{tier.tier_name}</p>
+                    </div>
+
+                    {isEditing ? (
+                      <div className="space-y-3 mt-3">
+                        {/* Min points */}
+                        <div>
+                          <label className="mb-1 block text-[10px] font-medium text-white/40">
+                            Seuil minimum (CHF/EUR = points)
+                          </label>
+                          <input
+                            type="number"
+                            value={currentMinPts}
+                            onChange={e => setTierMinPoints(p => ({ ...p, [tier.id]: Number(e.target.value) }))}
+                            className="w-40 rounded-lg border border-white/10 bg-[#16161c] px-3 py-1.5 text-xs text-white outline-none focus:border-white/30"
+                          />
+                        </div>
+                        {/* Benefits list */}
+                        <div>
+                          <label className="mb-1.5 block text-[10px] font-medium text-white/40">Avantages</label>
+                          <div className="space-y-1.5">
+                            {currentBenefits.map((b, i) => (
+                              <div key={i} className="flex items-center gap-2">
+                                <input
+                                  value={b}
+                                  onChange={e => {
+                                    const next = [...currentBenefits];
+                                    next[i] = e.target.value;
+                                    setTierBenefits(p => ({ ...p, [tier.id]: next }));
+                                  }}
+                                  className="flex-1 rounded-lg border border-white/10 bg-[#16161c] px-3 py-1.5 text-xs text-white outline-none focus:border-white/30"
+                                />
+                                <button
+                                  onClick={() => {
+                                    const next = currentBenefits.filter((_, idx) => idx !== i);
+                                    setTierBenefits(p => ({ ...p, [tier.id]: next }));
+                                  }}
+                                  className="rounded-lg p-1.5 text-white/30 hover:bg-white/8 hover:text-red-400">
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              onClick={() => setTierBenefits(p => ({ ...p, [tier.id]: [...currentBenefits, ""] }))}
+                              className="flex items-center gap-1.5 rounded-lg border border-dashed border-white/20 px-3 py-1.5 text-xs text-white/40 hover:border-white/40 hover:text-white/60 transition-colors">
+                              <Plus className="h-3 w-3" /> Ajouter un avantage
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-xs text-white/40 mb-2">
+                          Dès {tier.min_orders.toLocaleString()} CHF/EUR dépensés
+                        </p>
+                        <ul className="space-y-1">
+                          {tier.benefits?.map((b, i) => (
+                            <li key={i} className="text-xs text-white/60">• {b}</li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+
+                  {isAdmin && (
+                    <div className="flex gap-2 shrink-0">
+                      {isEditing ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setEditingTier(null);
+                              setTierBenefits(p => { const c = { ...p }; delete c[tier.id]; return c; });
+                              setTierMinPoints(p => { const c = { ...p }; delete c[tier.id]; return c; });
+                            }}
+                            className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/40 hover:bg-white/6">
+                            Annuler
+                          </button>
+                          <button
+                            onClick={() => saveTier(tier.id)}
+                            disabled={savingTier === tier.id}
+                            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+                            {savingTier === tier.id ? <Spinner size="sm" /> : <Save className="h-3 w-3" />}
+                            Sauvegarder
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setEditingTier(tier.id);
+                            setTierBenefits(p => ({ ...p, [tier.id]: [...(tier.benefits ?? [])] }));
+                            setTierMinPoints(p => ({ ...p, [tier.id]: tier.min_orders }));
+                          }}
+                          className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/40 hover:bg-white/8 hover:text-white">
+                          <Edit3 className="h-3.5 w-3.5" /> Modifier
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-white/40 mb-2">
-                Dès {tier.min_orders} point{tier.min_orders !== 1 ? "s" : ""}
-              </p>
-              <ul className="space-y-1">
-                {tier.benefits?.map((b, i) => (
-                  <li key={i} className="text-xs text-white/60">• {b}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

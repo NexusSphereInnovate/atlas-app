@@ -5,7 +5,7 @@ import {
   FileBadge, Plus, Upload, Eye, CheckCircle, Clock,
   X, User, Calendar, DollarSign, Send, Pen, ArrowLeft,
   ChevronRight, Shield, AlertCircle, FileText, Sparkles,
-  Building2,
+  Building2, Trash2,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { useCurrency } from "@/lib/contexts/currency-context";
@@ -80,6 +80,8 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [signingContract, setSigningContract] = useState<Contract | null>(null);
   const [updatingStatus, setUpdatingStatus]   = useState<string | null>(null);
+  const [deletingContract, setDeletingContract] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete]       = useState<Contract | null>(null);
 
   // Create modal
   const [createOpen, setCreateOpen] = useState(false);
@@ -175,6 +177,24 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
       setPdfUrl(data?.signedUrl ?? null);
       setPdfLoading(false);
     }
+  }
+
+  async function handleDelete(contract: Contract) {
+    setDeletingContract(contract.id);
+    const sb = createClient();
+    // Remove PDF from storage if exists
+    if (contract.pdf_path) {
+      await sb.storage.from("contracts").remove([contract.pdf_path]);
+    }
+    const { error } = await sb.from("contracts").delete().eq("id", contract.id);
+    if (error) toast("error", error.message);
+    else {
+      toast("success", lang==="fr"?"Contrat supprimé":"Contract deleted");
+      if (selected?.id === contract.id) { setSelected(null); setPdfUrl(null); }
+      await load();
+    }
+    setDeletingContract(null);
+    setConfirmDelete(null);
   }
 
   async function updateStatus(id: string, status: ContractStatus) {
@@ -351,6 +371,13 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
                         )}
                       </div>
                     </div>
+                    {isAdmin && c.status !== "signed" && (
+                      <button
+                        onClick={e => { e.stopPropagation(); setConfirmDelete(c); }}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-white/20 transition-colors hover:bg-red-500/15 hover:text-red-400">
+                        <Trash2 className="h-3.5 w-3.5"/>
+                      </button>
+                    )}
                     <ChevronRight className="h-3.5 w-3.5 shrink-0 text-white/20"/>
                   </div>
                 </button>
@@ -532,12 +559,22 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
             </div>
           </div>
 
-          {/* ── Admin: status controls ────────────────────────── */}
+          {/* ── Admin: status controls + delete ──────────────── */}
           {isAdmin && (
             <div className="rounded-xl border border-white/8 bg-white/3 p-4 space-y-2">
-              <p className="text-xs font-medium uppercase tracking-wider text-white/30">
-                {lang==="fr"?"Changer le statut":"Change status"}
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium uppercase tracking-wider text-white/30">
+                  {lang==="fr"?"Changer le statut":"Change status"}
+                </p>
+                {selected.status !== "signed" && (
+                  <button
+                    onClick={() => setConfirmDelete(selected)}
+                    className="flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/8 px-3 py-1.5 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/15">
+                    <Trash2 className="h-3.5 w-3.5"/>
+                    {lang==="fr"?"Supprimer":"Delete"}
+                  </button>
+                )}
+              </div>
               <div className="flex flex-wrap gap-2">
                 {(["draft","sent","signed","cancelled"] as ContractStatus[])
                   .filter(s=>s!==selected.status)
@@ -556,6 +593,43 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Confirm delete modal ───────────────────────────────── */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#141418] p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-500/15">
+                <Trash2 className="h-5 w-5 text-red-400"/>
+              </div>
+              <div>
+                <p className="font-semibold text-white">
+                  {lang==="fr"?"Supprimer ce contrat ?":"Delete this contract?"}
+                </p>
+                <p className="text-xs text-white/40 truncate max-w-[200px]">{confirmDelete.title}</p>
+              </div>
+            </div>
+            <p className="text-sm text-white/50 mb-5">
+              {lang==="fr"
+                ?"Cette action est irréversible. Le PDF sera également supprimé du stockage."
+                :"This action is irreversible. The PDF will also be deleted from storage."}
+            </p>
+            <div className="flex gap-3">
+              <button onClick={()=>setConfirmDelete(null)}
+                className="flex-1 rounded-xl border border-white/10 py-2.5 text-sm text-white/50 hover:bg-white/5">
+                {lang==="fr"?"Annuler":"Cancel"}
+              </button>
+              <button
+                onClick={()=>handleDelete(confirmDelete)}
+                disabled={deletingContract===confirmDelete.id}
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 py-2.5 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-50">
+                {deletingContract===confirmDelete.id ? <Spinner size="sm"/> : <Trash2 className="h-4 w-4"/>}
+                {lang==="fr"?"Supprimer":"Delete"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
