@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   FileBadge, Plus, Upload, Eye, CheckCircle, Clock,
   X, User, Calendar, DollarSign, Send, Pen, ArrowLeft,
-  ChevronRight, Shield, AlertCircle, FileText,
+  ChevronRight, Shield, AlertCircle, FileText, Sparkles,
+  Building2,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { useCurrency } from "@/lib/contexts/currency-context";
@@ -34,6 +35,17 @@ interface Contract {
   client?: { first_name: string | null; last_name: string | null; email: string | null } | null;
   agent?: { first_name: string | null; last_name: string | null } | null;
   invoice?: { invoice_number: string; total: number; currency: string } | null;
+}
+
+interface ClientInfo {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  billing_address: string | null;
+  billing_city: string | null;
+  billing_postal_code: string | null;
+  billing_country: string | null;
 }
 
 const STATUS_COLORS: Record<ContractStatus, string> = {
@@ -71,12 +83,17 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
 
   // Create modal
   const [createOpen, setCreateOpen] = useState(false);
-  const [clients, setClients] = useState<{ id: string; first_name: string | null; last_name: string | null; email: string | null }[]>([]);
+  const [clients, setClients] = useState<ClientInfo[]>([]);
   const [agents,  setAgents]  = useState<{ id: string; first_name: string | null; last_name: string | null }[]>([]);
   const [newContract, setNewContract] = useState({
     title: "", version: "1.0", clientId: "",
     agentId: "", commissionType: "percentage" as "fixed" | "percentage",
     commissionValue: "", file: null as File | null,
+    // Client info for PDF generation
+    civility: "M." as "M." | "Mme.",
+    address: "", city: "", postalCode: "", country: "",
+    companyName: "", companyAddress: "",
+    pdfMode: "auto" as "auto" | "manual",
   });
   const [creating, setCreating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -87,9 +104,26 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
   useEffect(() => {
     if (!isAdmin) return;
     const sb = createClient();
-    sb.from("user_profiles").select("id,first_name,last_name,email").eq("role","client").then(({data})=>setClients(data??[]));
+    sb.from("user_profiles")
+      .select("id,first_name,last_name,email,billing_address,billing_city,billing_postal_code,billing_country")
+      .eq("role","client")
+      .then(({data})=>setClients((data as ClientInfo[])??[]));
     sb.from("user_profiles").select("id,first_name,last_name").eq("role","agent").then(({data})=>setAgents(data??[]));
   }, [isAdmin]);
+
+  // Auto-fill address when client changes
+  useEffect(() => {
+    if (!newContract.clientId) return;
+    const client = clients.find(c => c.id === newContract.clientId);
+    if (!client) return;
+    setNewContract(n => ({
+      ...n,
+      address:    client.billing_address    ?? n.address,
+      city:       client.billing_city        ?? n.city,
+      postalCode: client.billing_postal_code ?? n.postalCode,
+      country:    client.billing_country     ?? n.country,
+    }));
+  }, [newContract.clientId, clients]);
 
   async function load() {
     setLoading(true);
@@ -125,7 +159,6 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
     })) as Contract[];
 
     setContracts(enriched);
-    // Refresh selected if open
     if (selected) {
       const refreshed = enriched.find(c=>c.id===selected.id);
       if (refreshed) setSelected(refreshed);
@@ -165,7 +198,54 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
     const sb = createClient();
 
     let pdfPath: string | null = null;
-    if (newContract.file) {
+
+    // ── Mode auto : générer le PDF via l'API ──────────────────────
+    if (newContract.pdfMode === "auto") {
+      const selectedClient = clients.find(c => c.id === newContract.clientId);
+      const today = new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+
+      try {
+        const res = await fetch("/api/contracts/generate-pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            civility:        newContract.civility,
+            firstName:       selectedClient?.first_name ?? "",
+            lastName:        selectedClient?.last_name  ?? "",
+            address:         newContract.address,
+            postalCode:      newContract.postalCode,
+            city:            newContract.city,
+            country:         newContract.country,
+            companyName:     newContract.companyName  || undefined,
+            companyAddress:  newContract.companyAddress || undefined,
+            contractTitle:   newContract.title,
+            contractDate:    today,
+          }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "PDF generation failed" }));
+          toast("error", err.error ?? "Erreur génération PDF");
+          setCreating(false);
+          return;
+        }
+
+        const blob    = await res.blob();
+        const pdfFile = new File([blob], `contrat-${selectedClient?.last_name?.toLowerCase()}.pdf`, { type: "application/pdf" });
+        pdfPath = `${newContract.clientId}/${Date.now()}.pdf`;
+
+        const { error: upErr } = await sb.storage.from("contracts").upload(pdfPath, pdfFile);
+        if (upErr) { toast("error", upErr.message); setCreating(false); return; }
+
+      } catch (e) {
+        toast("error", lang==="fr"?"Erreur de génération PDF":"PDF generation error");
+        setCreating(false);
+        return;
+      }
+    }
+
+    // ── Mode manuel : upload du fichier ───────────────────────────
+    if (newContract.pdfMode === "manual" && newContract.file) {
       const ext = newContract.file.name.split(".").pop();
       pdfPath = `${newContract.clientId}/${Date.now()}.${ext}`;
       const { error: upErr } = await sb.storage.from("contracts").upload(pdfPath, newContract.file);
@@ -189,7 +269,12 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
     else {
       toast("success", lang==="fr"?"Contrat créé et envoyé au client":"Contract created and sent");
       setCreateOpen(false);
-      setNewContract({ title:"", version:"1.0", clientId:"", agentId:"", commissionType:"percentage", commissionValue:"", file:null });
+      setNewContract({
+        title:"", version:"1.0", clientId:"", agentId:"",
+        commissionType:"percentage", commissionValue:"", file:null,
+        civility:"M.", address:"", city:"", postalCode:"", country:"",
+        companyName:"", companyAddress:"", pdfMode:"auto",
+      });
       load();
     }
     setCreating(false);
@@ -300,7 +385,6 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
               </div>
             </div>
 
-            {/* Admin: sign or send manually */}
             {isClient && selected.status==="sent" && (
               <button onClick={()=>setSigningContract(selected)}
                 className="flex shrink-0 items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500">
@@ -393,7 +477,6 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
               <p className="text-sm font-medium text-white">{formatDate(selected.created_at)}</p>
             </div>
 
-            {/* Commission — admin only */}
             {isAdmin && selected.agent && (
               <div className="col-span-2 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3 sm:col-span-1">
                 <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-violet-400/70">
@@ -538,24 +621,152 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
                 </div>
               </div>
 
-              {/* PDF Upload */}
+              {/* PDF Mode toggle */}
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-white/50">
-                  {lang==="fr"?"Fichier PDF du contrat":"Contract PDF file"}
+                <label className="mb-2 block text-xs font-medium text-white/50">
+                  {lang==="fr"?"Document PDF":"PDF Document"}
                 </label>
-                <input ref={fileRef} type="file" accept=".pdf" className="hidden"
-                  onChange={e=>setNewContract(n=>({...n,file:e.target.files?.[0]??null}))}/>
-                <button onClick={()=>fileRef.current?.click()}
-                  className={cn(
-                    "flex w-full items-center justify-center gap-2 rounded-xl border border-dashed py-3 text-sm transition-colors",
-                    newContract.file
-                      ?"border-blue-500/40 bg-blue-500/8 text-blue-300"
-                      :"border-white/20 bg-white/3 text-white/50 hover:border-white/40 hover:bg-white/5"
-                  )}>
-                  <Upload className="h-4 w-4"/>
-                  {newContract.file ? newContract.file.name : (lang==="fr"?"Déposer le PDF ici":"Drop PDF here")}
-                </button>
+                <div className="flex gap-2 rounded-xl border border-white/10 bg-[#16161c] p-1">
+                  <button
+                    onClick={()=>setNewContract(n=>({...n,pdfMode:"auto"}))}
+                    className={cn(
+                      "flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-medium transition-all",
+                      newContract.pdfMode==="auto"
+                        ?"bg-blue-600 text-white shadow-sm"
+                        :"text-white/40 hover:text-white/60"
+                    )}>
+                    <Sparkles className="h-3.5 w-3.5"/>
+                    {lang==="fr"?"Générer automatiquement":"Auto-generate"}
+                  </button>
+                  <button
+                    onClick={()=>setNewContract(n=>({...n,pdfMode:"manual"}))}
+                    className={cn(
+                      "flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-medium transition-all",
+                      newContract.pdfMode==="manual"
+                        ?"bg-white/12 text-white"
+                        :"text-white/40 hover:text-white/60"
+                    )}>
+                    <Upload className="h-3.5 w-3.5"/>
+                    {lang==="fr"?"Uploader un PDF":"Upload PDF"}
+                  </button>
+                </div>
               </div>
+
+              {/* Auto-generate fields */}
+              {newContract.pdfMode === "auto" && (
+                <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-3.5 w-3.5 text-blue-400"/>
+                    <p className="text-xs font-semibold text-blue-300">
+                      {lang==="fr"?"Informations pour le contrat":"Contract information"}
+                    </p>
+                  </div>
+
+                  {/* Civility + Name (read-only, from client) */}
+                  <div className="flex gap-2">
+                    <div className="w-24">
+                      <label className="mb-1 block text-[10px] font-medium text-white/40">Civilité</label>
+                      <select value={newContract.civility}
+                        onChange={e=>setNewContract(n=>({...n,civility:e.target.value as "M."|"Mme."}))}
+                        className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-2 py-2 text-xs text-white outline-none focus:border-white/30">
+                        <option value="M.">M.</option>
+                        <option value="Mme.">Mme.</option>
+                      </select>
+                    </div>
+                    <div className="flex-1">
+                      <label className="mb-1 block text-[10px] font-medium text-white/40">
+                        {lang==="fr"?"Nom complet (auto)":"Full name (auto)"}
+                      </label>
+                      <div className="rounded-lg border border-white/8 bg-white/4 px-3 py-2 text-xs text-white/50">
+                        {newContract.clientId
+                          ? (() => { const c = clients.find(x=>x.id===newContract.clientId); return c ? `${c.first_name??""} ${c.last_name??""}`.trim() : "—"; })()
+                          : <span className="text-white/25">{lang==="fr"?"Sélectionner un client":"Select a client"}</span>
+                        }
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Address */}
+                  <div>
+                    <label className="mb-1 block text-[10px] font-medium text-white/40">
+                      {lang==="fr"?"Adresse":"Address"}
+                    </label>
+                    <input value={newContract.address}
+                      onChange={e=>setNewContract(n=>({...n,address:e.target.value}))}
+                      placeholder={lang==="fr"?"Rue, numéro...":"Street, number..."}
+                      className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-3 py-2 text-xs text-white outline-none focus:border-white/30 placeholder:text-white/20"/>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="mb-1 block text-[10px] font-medium text-white/40">
+                        {lang==="fr"?"Code postal":"Postal code"}
+                      </label>
+                      <input value={newContract.postalCode}
+                        onChange={e=>setNewContract(n=>({...n,postalCode:e.target.value}))}
+                        placeholder="1000"
+                        className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-3 py-2 text-xs text-white outline-none focus:border-white/30 placeholder:text-white/20"/>
+                    </div>
+                    <div className="col-span-2">
+                      <label className="mb-1 block text-[10px] font-medium text-white/40">
+                        {lang==="fr"?"Ville":"City"}
+                      </label>
+                      <input value={newContract.city}
+                        onChange={e=>setNewContract(n=>({...n,city:e.target.value}))}
+                        placeholder={lang==="fr"?"Lausanne...":"London..."}
+                        className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-3 py-2 text-xs text-white outline-none focus:border-white/30 placeholder:text-white/20"/>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-[10px] font-medium text-white/40">
+                      {lang==="fr"?"Pays":"Country"}
+                    </label>
+                    <input value={newContract.country}
+                      onChange={e=>setNewContract(n=>({...n,country:e.target.value}))}
+                      placeholder={lang==="fr"?"Suisse, France...":"Switzerland, France..."}
+                      className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-3 py-2 text-xs text-white outline-none focus:border-white/30 placeholder:text-white/20"/>
+                  </div>
+
+                  {/* Optional company info */}
+                  <div className="pt-1 border-t border-white/8">
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <Building2 className="h-3 w-3 text-white/30"/>
+                      <p className="text-[10px] font-medium text-white/30 uppercase tracking-wider">
+                        {lang==="fr"?"Société (optionnel)":"Company (optional)"}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <input value={newContract.companyName}
+                        onChange={e=>setNewContract(n=>({...n,companyName:e.target.value}))}
+                        placeholder={lang==="fr"?"Nom de la société":"Company name"}
+                        className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-3 py-2 text-xs text-white outline-none focus:border-white/30 placeholder:text-white/20"/>
+                      <input value={newContract.companyAddress}
+                        onChange={e=>setNewContract(n=>({...n,companyAddress:e.target.value}))}
+                        placeholder={lang==="fr"?"Adresse de la société":"Company address"}
+                        className="w-full rounded-lg border border-white/10 bg-[#1a1a20] px-3 py-2 text-xs text-white outline-none focus:border-white/30 placeholder:text-white/20"/>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Manual PDF upload */}
+              {newContract.pdfMode === "manual" && (
+                <div>
+                  <input ref={fileRef} type="file" accept=".pdf" className="hidden"
+                    onChange={e=>setNewContract(n=>({...n,file:e.target.files?.[0]??null}))}/>
+                  <button onClick={()=>fileRef.current?.click()}
+                    className={cn(
+                      "flex w-full items-center justify-center gap-2 rounded-xl border border-dashed py-3 text-sm transition-colors",
+                      newContract.file
+                        ?"border-blue-500/40 bg-blue-500/8 text-blue-300"
+                        :"border-white/20 bg-white/3 text-white/50 hover:border-white/40 hover:bg-white/5"
+                    )}>
+                    <Upload className="h-4 w-4"/>
+                    {newContract.file ? newContract.file.name : (lang==="fr"?"Déposer le PDF ici":"Drop PDF here")}
+                  </button>
+                </div>
+              )}
 
               {/* Agent + Commission */}
               <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 space-y-3">
@@ -587,10 +798,22 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
                 )}
               </div>
 
-              <button onClick={handleCreate} disabled={creating||!newContract.title||!newContract.clientId}
+              <button onClick={handleCreate}
+                disabled={creating || !newContract.title || !newContract.clientId}
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50">
-                {creating?<Spinner size="sm"/>:<Send className="h-4 w-4"/>}
-                {lang==="fr"?"Créer & envoyer au client":"Create & send to client"}
+                {creating ? (
+                  <>
+                    <Spinner size="sm"/>
+                    {newContract.pdfMode==="auto"
+                      ? (lang==="fr"?"Génération du PDF...":"Generating PDF...")
+                      : (lang==="fr"?"Création...":"Creating...")}
+                  </>
+                ) : (
+                  <>
+                    {newContract.pdfMode==="auto" ? <Sparkles className="h-4 w-4"/> : <Send className="h-4 w-4"/>}
+                    {lang==="fr"?"Créer & envoyer au client":"Create & send to client"}
+                  </>
+                )}
               </button>
             </div>
           </div>

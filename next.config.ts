@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  // Avoid bundling @react-pdf/renderer on the client — server-side only
+  serverExternalPackages: ["@react-pdf/renderer"],
   images: {
     remotePatterns: [
       {
