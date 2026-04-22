@@ -532,8 +532,8 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
         </div>
       )}
 
-      {/* AGENT BONUS RULES — Admin editable */}
-      <div>
+      {/* AGENT BONUS RULES — Admin + Agent uniquement, pas les clients */}
+      {!isClient && <div>
         <p className="mb-3 text-sm font-semibold text-white">Paliers agents (bonus)</p>
         <div className="space-y-3">
           {agentRules.map((rule) => {
@@ -638,7 +638,7 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
             );
           })}
         </div>
-      </div>
+      </div>}
     </div>
 
     {/* Circle add modal */}
