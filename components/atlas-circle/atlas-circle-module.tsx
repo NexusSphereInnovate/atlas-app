@@ -39,7 +39,10 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
   const { toast } = useToast();
   const [memberTiers, setMemberTiers] = useState<MemberTier[]>([]);
   const [agentRules, setAgentRules] = useState<AgentBonusRule[]>([]);
-  const [clientStats, setClientStats] = useState({ totalPoints: 0 });
+  const [clientStats, setClientStats] = useState<{
+    totalPoints: number;
+    referralEntries: { id: string; amount: number; label: string; type: string; created_at: string }[];
+  }>({ totalPoints: 0, referralEntries: [] });
   const [agentStats, setAgentStats] = useState({ salesCount: 0, totalRevenue: 0 });
   const [loading, setLoading] = useState(true);
   const [editingRule, setEditingRule] = useState<string | null>(null);
@@ -86,10 +89,12 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
       if (isClient) {
         const { data: entries } = await supabase
           .from("atlas_circle_entries")
-          .select("amount")
-          .eq("client_id", profile.id);
+          .select("id,amount,label,type,created_at")
+          .eq("client_id", profile.id)
+          .order("created_at", { ascending: false });
         setClientStats({
           totalPoints: entries?.reduce((s, e) => s + (e.amount ?? 0), 0) ?? 0,
+          referralEntries: (entries ?? []).filter((e) => e.type === "referral"),
         });
       }
 
@@ -304,6 +309,36 @@ export function AtlasCircleModule({ profile }: AtlasCircleModuleProps) {
               </ul>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* SECTION PARRAINAGES CLIENT */}
+      {isClient && clientStats.referralEntries.length > 0 && (
+        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm font-semibold text-white">Mes commissions de parrainage</p>
+            <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-400">
+              +{clientStats.referralEntries.reduce((s, e) => s + e.amount, 0).toLocaleString()} pts
+            </span>
+          </div>
+          <div className="space-y-2">
+            {clientStats.referralEntries.map(entry => (
+              <div key={entry.id} className="flex items-center justify-between rounded-xl border border-white/8 bg-white/3 px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-white/80 truncate">{entry.label}</p>
+                  <p className="text-[11px] text-white/35">
+                    {new Date(entry.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })}
+                  </p>
+                </div>
+                <span className="ml-3 shrink-0 text-sm font-bold text-emerald-400">
+                  +{entry.amount.toLocaleString()} pts
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-[11px] text-white/25 text-center">
+            Ces points sont inclus dans votre solde Atlas Circle total
+          </p>
         </div>
       )}
 

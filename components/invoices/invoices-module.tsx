@@ -75,6 +75,10 @@ interface Invoice {
   payment_method: string | null;
   payment_ref: string | null;
   payment_link: string | null;
+  // Parrainage client
+  referrer_client_id: string | null;
+  referrer_comm_rate: number | null;
+  referrer?: { first_name: string | null; last_name: string | null } | null;
   client?: { first_name: string | null; last_name: string | null } | null;
   billing_items?: BillingItem[];
 }
@@ -86,6 +90,10 @@ const EMPTY_FORM = {
   items: [{ label: "", quantity: 1, unit_price: 0 }] as BillingItem[],
   commType: "percentage" as "fixed" | "percentage",
   commValue: "",
+  // Parrainage client
+  referrerEnabled: false,
+  referrerId: "",
+  referrerRate: "5",
 };
 
 export function InvoicesModule({ profile }: InvoicesModuleProps) {
@@ -164,7 +172,9 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
       currency, due_date, paid_at, payment_claimed_at, created_at,
       cgv_accepted, cgv_version, client_id, agent_id, comm_type, comm_value,
       payment_method, payment_ref, payment_link,
-      client:user_profiles!invoices_client_id_fkey(first_name, last_name)
+      referrer_client_id, referrer_comm_rate,
+      client:user_profiles!invoices_client_id_fkey(first_name, last_name),
+      referrer:user_profiles!invoices_referrer_client_id_fkey(first_name, last_name)
     `).order("created_at", { ascending: false });
     if (isClient) q = q.eq("client_id", profile.id);
     else if (profile.role === "agent") q = q.eq("agent_id", profile.id);
@@ -258,6 +268,21 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
     await load();
   }
 
+  // Crée la commission parrainage (atlas_circle_entries type "referral")
+  async function createReferralCommission(inv: Invoice, sb: ReturnType<typeof createClient>) {
+    if (!inv.referrer_client_id || !inv.referrer_comm_rate) return;
+    const commAmt = Math.round(inv.total * inv.referrer_comm_rate / 100);
+    if (commAmt <= 0) return;
+    await sb.from("atlas_circle_entries").insert({
+      client_id: inv.referrer_client_id,
+      type: "referral",
+      amount: commAmt,
+      label: `Parrainage — Facture ${inv.invoice_number} (${inv.referrer_comm_rate}% de ${Math.round(inv.total)} ${inv.currency ?? "CHF"})`,
+      ref_id: inv.id,
+      added_by: profile.id,
+    });
+  }
+
   async function updateStatus(id:string, status:InvoiceStatus) {
     setUpdatingStatus(id);
     const sb = createClient();
@@ -270,6 +295,7 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
         const inv = invoices.find(i => i.id === id) ?? selected;
         if (inv?.client_id) {
           const pts = Math.round(inv.total);
+          // Points Atlas Circle pour le client payeur
           await sb.from("atlas_circle_entries").insert({
             client_id: inv.client_id,
             type: "invoice",
@@ -278,6 +304,8 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
             ref_id: id,
             added_by: profile.id,
           });
+          // Commission parrainage si applicable
+          if (inv) await createReferralCommission(inv, sb);
         }
       }
       toast("success", lang==="fr"?"Statut mis à jour":"Status updated");
@@ -326,6 +354,8 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
       ref_id: selected.id,
       added_by: profile.id,
     });
+    // Commission parrainage si un client parrain est renseigné
+    await createReferralCommission(selected, sb);
 
     toast("success", lang==="fr"
       ? `Paiement confirmé ✓ (+${pts} points Circle)`
@@ -355,6 +385,9 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
       status:"draft",
       comm_type: newInvoice.agentId&&newInvoice.commValue?newInvoice.commType:null,
       comm_value: newInvoice.agentId&&newInvoice.commValue?Number(newInvoice.commValue):null,
+      // Parrainage client (seulement si activé et referrer sélectionné)
+      referrer_client_id: newInvoice.referrerEnabled && newInvoice.referrerId ? newInvoice.referrerId : null,
+      referrer_comm_rate: newInvoice.referrerEnabled && newInvoice.referrerId ? Number(newInvoice.referrerRate)||5 : null,
     }).select("id").single();
     if (error||!inv) { toast("error", error?.message??"Erreur"); setCreating(false); return; }
     await sb.from("billing_items").insert(
@@ -690,6 +723,30 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
               </>
             )}
           </div>
+
+          {/* Admin: info parrainage client */}
+          {isAdmin && !editing && selected.referrer_client_id && selected.referrer_comm_rate != null && (
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-400/70">
+                {lang==="fr"?"Parrainage client":"Client referral"}
+              </p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-white/70">
+                    {selected.referrer
+                      ? `${selected.referrer.first_name ?? ""} ${selected.referrer.last_name ?? ""}`.trim()
+                      : "—"}
+                  </p>
+                  <p className="text-[11px] text-white/35">
+                    {selected.referrer_comm_rate}% — {lang==="fr"?"versé au paiement":"paid on confirmation"}
+                  </p>
+                </div>
+                <p className="text-lg font-bold text-emerald-300">
+                  {fmt(selected.total * selected.referrer_comm_rate / 100)}
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Agent: commission en lecture seule */}
           {isAgent && !editing && selected.comm_value != null && (
@@ -1092,6 +1149,75 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
                       onChange={e=>setNewInvoice(n=>({...n,commValue:e.target.value}))}
                       type="number" placeholder={newInvoice.commType==="percentage"?"10":"500"}
                       className="flex-1 rounded-xl border border-white/10 bg-[#16161c] px-3 py-1.5 text-sm text-white outline-none placeholder:text-white/25"/>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Parrainage client ─────────────────────────────── */}
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+                {/* Checkbox opt-in */}
+                <label className="flex cursor-pointer items-start gap-3">
+                  <div
+                    onClick={() => setNewInvoice(n => ({ ...n, referrerEnabled: !n.referrerEnabled, referrerId: "" }))}
+                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-all ${
+                      newInvoice.referrerEnabled ? "border-emerald-500 bg-emerald-500" : "border-white/20 bg-transparent"
+                    }`}
+                  >
+                    {newInvoice.referrerEnabled && <CheckCircle className="h-3 w-3 text-white"/>}
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-emerald-300">
+                      {lang==="fr"?"Parrainage client":"Client referral"}
+                    </p>
+                    <p className="text-[11px] text-white/40">
+                      {lang==="fr"
+                        ?"Ce client a été recommandé par un autre client — commission sur paiement"
+                        :"This client was referred by another client — commission on payment"}
+                    </p>
+                  </div>
+                </label>
+
+                {/* Dropdown + taux (visible seulement si coché) */}
+                {newInvoice.referrerEnabled && (
+                  <div className="space-y-2 pt-1">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-white/40">
+                        {lang==="fr"?"Client parrain (doit être dans la base)":"Referring client (must be in DB)"}
+                      </label>
+                      <select
+                        value={newInvoice.referrerId}
+                        onChange={e => setNewInvoice(n => ({ ...n, referrerId: e.target.value }))}
+                        className="w-full rounded-xl border border-white/10 bg-[#1a1a20] px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/50"
+                      >
+                        <option value="">{lang==="fr"?"— Sélectionner le client parrain —":"— Select referring client —"}</option>
+                        {clients
+                          .filter(c => c.id !== newInvoice.clientId) // Exclude the invoice client
+                          .map(c => (
+                            <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1">
+                        <label className="mb-1 block text-[11px] font-medium text-white/40">
+                          {lang==="fr"?"Taux commission":"Commission rate"}
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number" min="0" max="50" step="0.5"
+                            value={newInvoice.referrerRate}
+                            onChange={e => setNewInvoice(n => ({ ...n, referrerRate: e.target.value }))}
+                            className="w-24 rounded-xl border border-white/10 bg-[#16161c] px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/50"
+                          />
+                          <span className="text-sm text-white/50">%</span>
+                          {newInvoice.referrerId && newInvoice.referrerRate && (
+                            <span className="text-xs text-emerald-400 font-medium">
+                              = {fmt(newInvoice.items.reduce((s,i)=>s+i.quantity*i.unit_price,0) * Number(newInvoice.referrerRate) / 100)} {lang==="fr"?"au paiement":"on payment"}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
