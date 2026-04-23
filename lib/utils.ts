@@ -6,11 +6,22 @@ export function cn(...inputs: ClassValue[]): string {
 }
 
 export function formatCurrency(amount: number, currency = "CHF"): string {
-  return new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-  }).format(amount);
+  const abs = Math.abs(amount);
+  const sign = amount < 0 ? "−" : "";
+
+  if (abs >= 1000) {
+    const k = abs / 1000;
+    // 1.0 → "1k", 1.5 → "1.5k", 1.25 → "1.3k"
+    const kStr = k % 1 === 0 ? k.toFixed(0) : k.toFixed(1);
+    return `${sign}${kStr}k ${currency}`;
+  }
+
+  // Sous 1 000 : sans décimales inutiles
+  const formatted = new Intl.NumberFormat("fr-FR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(abs);
+  return `${sign}${formatted} ${currency}`;
 }
 
 export function formatDate(date: string | Date | null | undefined): string {
