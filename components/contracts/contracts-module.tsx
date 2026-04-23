@@ -5,7 +5,7 @@ import {
   FileBadge, Plus, Upload, Eye, CheckCircle, Clock,
   X, User, Calendar, DollarSign, Send, Pen, ArrowLeft,
   ChevronRight, Shield, AlertCircle, FileText, Sparkles,
-  Building2, Trash2, PackagePlus, ChevronDown,
+  Building2, Trash2, PackagePlus, ChevronDown, Download,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { useCurrency } from "@/lib/contexts/currency-context";
@@ -51,6 +51,11 @@ interface Contract {
   signed_at: string | null;
   signed_by: string | null;
   created_at: string;
+  // Données stockées lors de la création (migration 014)
+  items?: ContractItem[] | null;
+  total_amount?: number | null;
+  contract_currency?: string | null;
+  client_referral_rate?: number | null;
   client?: { first_name: string | null; last_name: string | null; email: string | null } | null;
   agent?: { first_name: string | null; last_name: string | null } | null;
   invoice?: { invoice_number: string; total: number; currency: string } | null;
@@ -95,8 +100,9 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
   const [contracts, setContracts]   = useState<Contract[]>([]);
   const [loading, setLoading]       = useState(true);
   const [selected, setSelected]     = useState<Contract | null>(null);
-  const [pdfUrl, setPdfUrl]         = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfUrl, setPdfUrl]             = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading]     = useState(false);
+  const [downloadingSigned, setDownloadingSigned] = useState(false);
   const [signingContract, setSigningContract] = useState<Contract | null>(null);
   const [updatingStatus, setUpdatingStatus]   = useState<string | null>(null);
   const [deletingContract, setDeletingContract] = useState<string | null>(null);
@@ -155,7 +161,7 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
     setLoading(true);
     const sb = createClient();
     let q = sb.from("contracts")
-      .select("id,title,version,status,pdf_path,client_id,agent_id,commission_type,commission_value,invoice_id,signed_at,signed_by,created_at")
+      .select("id,title,version,status,pdf_path,client_id,agent_id,commission_type,commission_value,invoice_id,signed_at,signed_by,created_at,items,total_amount,contract_currency,client_referral_rate")
       .order("created_at", { ascending: false });
     if (isClient) q = q.eq("client_id", profile.id).neq("status", "draft");
 
@@ -200,6 +206,62 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
       const { data } = await createClient().storage.from("contracts").createSignedUrl(contract.pdf_path, 1800);
       setPdfUrl(data?.signedUrl ?? null);
       setPdfLoading(false);
+    }
+  }
+
+  // Génère et télécharge le PDF avec le tampon de signature client
+  async function downloadSignedPdf(contract: Contract) {
+    if (!contract.client_id) return;
+    setDownloadingSigned(true);
+    try {
+      const sb = createClient();
+      // Récupérer le profil client pour l'adresse
+      const { data: cp } = await sb.from("user_profiles")
+        .select("first_name,last_name,billing_address,billing_city,billing_postal_code,billing_country")
+        .eq("id", contract.client_id).single();
+
+      const clientFullName = contract.client
+        ? `${contract.client.first_name ?? ""} ${contract.client.last_name ?? ""}`.trim()
+        : `${cp?.first_name ?? ""} ${cp?.last_name ?? ""}`.trim();
+
+      const signedName = clientFullName;
+
+      const res = await fetch("/api/contracts/generate-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          civility: "",
+          firstName: cp?.first_name ?? contract.client?.first_name ?? "",
+          lastName:  cp?.last_name  ?? contract.client?.last_name  ?? "",
+          address:      cp?.billing_address      ?? "",
+          postalCode:   cp?.billing_postal_code  ?? "",
+          city:         cp?.billing_city         ?? "",
+          country:      cp?.billing_country      ?? "",
+          contractTitle: contract.title,
+          contractDate: new Date(contract.created_at).toLocaleDateString("fr-FR", {
+            day: "numeric", month: "long", year: "numeric",
+          }),
+          items: contract.items ?? [],
+          totalAmount: contract.total_amount ?? 0,
+          currency: contract.contract_currency ?? "CHF",
+          clientReferralRate: contract.client_referral_rate ?? 5,
+          clientSignedAt: contract.signed_at,
+          clientSignedName: signedName,
+        }),
+      });
+
+      if (!res.ok) { toast("error", "Erreur génération PDF"); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `contrat-signe-${(cp?.last_name ?? "client").toLowerCase()}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast("error", "Erreur téléchargement PDF signé");
+    } finally {
+      setDownloadingSigned(false);
     }
   }
 
@@ -526,6 +588,17 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
                 </div>
                 <p className="text-sm font-medium text-white">{formatDate(selected.signed_at)}</p>
                 <p className="text-xs text-white/40">{clientName(selected)}</p>
+                {/* Télécharger le PDF avec tampon de signature */}
+                <button
+                  onClick={() => downloadSignedPdf(selected)}
+                  disabled={downloadingSigned}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600/20 border border-emerald-500/30 px-3 py-2 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-600/30 disabled:opacity-50"
+                >
+                  {downloadingSigned
+                    ? <Spinner size="sm"/>
+                    : <Download className="h-3.5 w-3.5"/>}
+                  {lang==="fr"?"Télécharger PDF signé":"Download signed PDF"}
+                </button>
               </div>
             )}
 

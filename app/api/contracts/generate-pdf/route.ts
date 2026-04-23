@@ -171,6 +171,16 @@ const S = StyleSheet.create({
   disclaimerText:  { fontSize: 7.5, color: GRAY, lineHeight: 1.55 },
 });
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+// Séparateur milliers avec apostrophe suisse (évite le / de fr-CH en Node.js)
+function fmtNum(n: number): string {
+  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, "\u2019");
+}
+
+function fmtMoney(amount: number, currency: string) {
+  return `${fmtNum(amount)} ${currency}`;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface ContractItem {
   label: string;
@@ -195,12 +205,11 @@ interface ContractData {
   totalAmount: number;
   currency: string;
   clientReferralRate: number;
+  // Signature électronique client (optionnel — si contrat signé)
+  clientSignedAt?: string;
+  clientSignedName?: string;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function fmtMoney(amount: number, currency: string) {
-  return `${amount.toLocaleString("fr-CH")} ${currency}`;
-}
 
 const CE = React.createElement;
 
@@ -259,11 +268,20 @@ function ContractDocument({ data }: { data: ContractData }) {
     address, postalCode, city, country,
     companyName, companyAddress,
     contractDate, items, totalAmount, currency, clientReferralRate,
+    clientSignedAt, clientSignedName,
   } = data;
 
   const clientName  = `${civility} ${firstName} ${lastName}`.trim();
   const cityLine    = [postalCode, city].filter(Boolean).join(" ");
   const countryLine = [cityLine, country].filter(Boolean).join(", ");
+
+  // Formatage date/heure de la signature client
+  const signedDateStr = clientSignedAt
+    ? new Date(clientSignedAt).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })
+    : null;
+  const signedTimeStr = clientSignedAt
+    ? new Date(clientSignedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
+    : null;
 
   return CE(Document,
     { title: "Contrat de prestations de services — Atlas Incorporate", author: "Atlas Incorporate" },
@@ -338,7 +356,6 @@ function ContractDocument({ data }: { data: ContractData }) {
           B("Mise en place de structures transfrontalières"),
           B("Assistance aux démarches administratives"),
           B("Coordination avec des prestataires tiers"),
-          B("Fourniture d\u2019outils opérationnels (facturation, site web, etc.)"),
           P("La portée exacte des prestations est définie dans les documents commerciaux annexes.", { marginTop: 4 }),
         ),
 
@@ -397,8 +414,6 @@ function ContractDocument({ data }: { data: ContractData }) {
           B("De la gestion ou de l\u2019exploitation de la structure créée"),
           B("Des conséquences fiscales, sociales ou juridiques"),
           B("De toute perte indirecte ou manque à gagner"),
-          P("En toute hypothèse, la responsabilité du Prestataire est limitée au montant total effectivement payé par le Client au titre du présent contrat.",
-            { marginTop: 4, fontFamily: "Helvetica-Bold", color: DARK }),
         ),
 
       ),
@@ -444,9 +459,9 @@ function ContractDocument({ data }: { data: ContractData }) {
                 CE(Text, { style: { ...S.tableCell, flex: 1 } }, item.label),
                 CE(Text, { style: { ...S.tableCell, width: 36, textAlign: "center" } }, String(item.quantity)),
                 CE(Text, { style: { ...S.tableCell, width: 82, textAlign: "right" } },
-                  `${item.unit_price.toLocaleString("fr-CH")} ${item.currency}`),
+                  `${fmtNum(item.unit_price)} ${item.currency}`),
                 CE(Text, { style: { ...S.tableCell, width: 82, textAlign: "right" } },
-                  `${(item.unit_price * item.quantity).toLocaleString("fr-CH")} ${item.currency}`),
+                  `${fmtNum(item.unit_price * item.quantity)} ${item.currency}`),
               )
             ),
             CE(View, { style: S.tableTotalRow },
@@ -540,7 +555,7 @@ function ContractDocument({ data }: { data: ContractData }) {
 
         // ── Signatures ────────────────────────────────────────────────────────
         CE(View, { style: S.sigSection },
-          CE(Text, { style: { ...S.artNum, ...S.partiesLabel, marginBottom: 6 } },
+          CE(Text, { style: { fontSize: 8, fontFamily: "Helvetica-Bold", color: GOLD, letterSpacing: 1.5, marginBottom: 6 } },
             "SIGNATURES"),
           CE(Text, { style: S.sigIntro },
             `Fait en deux exemplaires originaux, le ${contractDate}.`),
@@ -563,11 +578,23 @@ function ContractDocument({ data }: { data: ContractData }) {
             // Client
             CE(View, { style: S.sigBoxRight },
               CE(Text, { style: S.sigLabel }, "LE CLIENT"),
-              CE(Text, { style: S.sigSub }, clientName),
-              CE(View, { style: S.sigBlank },
-                CE(Text, { style: S.sigBlankHint }, "Espace réservé à la signature"),
+              CE(Text, { style: S.sigSub }, clientSignedName ?? clientName),
+              // Tampon si signé, zone vide sinon
+              signedDateStr && signedTimeStr
+                ? CE(View, { style: S.sigStamp },
+                    CE(Text, { style: S.sigStampName }, clientSignedName ?? clientName),
+                    CE(Text, { style: S.sigStampLine }, `Signé le ${signedDateStr} à ${signedTimeStr}`),
+                    CE(Text, { style: S.sigStampLine }, "Signature électronique — saisie du nom complet confirmée"),
+                    CE(Text, { style: S.sigStampSeal }, "\u2713  SIGNATURE \u00c9LECTRONIQUE CERTIFI\u00c9E"),
+                  )
+                : CE(View, { style: S.sigBlank },
+                    CE(Text, { style: S.sigBlankHint }, "Espace réservé à la signature"),
+                  ),
+              CE(Text, { style: S.sigNote },
+                signedDateStr
+                  ? `Signé électroniquement le ${signedDateStr} à ${signedTimeStr}`
+                  : 'Précédée de la mention « Lu et approuvé »'
               ),
-              CE(Text, { style: S.sigNote }, 'Précédée de la mention « Lu et approuvé »'),
             ),
           ),
         ),
