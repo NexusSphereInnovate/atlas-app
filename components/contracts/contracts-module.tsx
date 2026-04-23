@@ -413,7 +413,8 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
 
   // ── Contract items editing ────────────────────────────────────────
   function startEditContractItems() {
-    setContractEditItems(selected?.items?.map(i=>({...i})) ?? []);
+    const existing = selected?.items?.map(i=>({...i})) ?? [];
+    setContractEditItems(existing.length > 0 ? existing : [{ label: "", quantity: 1, unit_price: 0, currency: selected?.contract_currency ?? "CHF" }]);
     setEditingContractItems(true);
   }
   function updateContractEditItem(idx: number, field: keyof ContractItem, val: string | number) {
@@ -719,8 +720,22 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
                 <div className="col-span-5">{lang==="fr"?"Prestation":"Service"}</div>
                 <div className="col-span-2 text-center">{lang==="fr"?"Qté":"Qty"}</div>
                 <div className="col-span-2 text-right">{lang==="fr"?"P.U.":"Unit"}</div>
-                <div className="col-span-3 text-right">Total</div>
+                <div className={editingContractItems ? "col-span-2 text-right" : "col-span-3 text-right"}>Total</div>
+                {editingContractItems && <div className="col-span-1"/>}
               </div>
+
+              {/* Empty state (read mode) */}
+              {!editingContractItems && (selected.items ?? []).length === 0 && (
+                <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
+                  <FileText className="h-7 w-7 text-white/10"/>
+                  <p className="text-sm text-white/30">{lang==="fr"?"Aucune prestation enregistrée":"No services recorded"}</p>
+                  {isAdmin && (
+                    <p className="text-[11px] text-white/20">
+                      {lang==="fr"?"→ Cliquez sur Modifier pour ajouter des prestations":"→ Click Edit to add services"}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Items rows */}
               {(editingContractItems ? contractEditItems : (selected.items ?? [])).map((item, idx) => (
@@ -747,12 +762,10 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
                         {fmt(item.quantity * item.unit_price)}
                       </div>
                       <div className="col-span-1 flex justify-end">
-                        {contractEditItems.length > 1 && (
-                          <button onClick={() => removeContractEditItem(idx)}
-                            className="flex h-6 w-6 items-center justify-center rounded text-white/25 hover:text-red-400">
-                            <X className="h-3.5 w-3.5"/>
-                          </button>
-                        )}
+                        <button onClick={() => removeContractEditItem(idx)}
+                          className="flex h-6 w-6 items-center justify-center rounded text-white/25 transition-colors hover:text-red-400">
+                          <X className="h-3.5 w-3.5"/>
+                        </button>
                       </div>
                     </>
                   ) : (

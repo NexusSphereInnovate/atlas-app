@@ -192,7 +192,8 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
   }
 
   function startEdit(inv: Invoice) {
-    setEditItems(inv.billing_items?.map(i=>({...i})) ?? []);
+    const existing = inv.billing_items?.map(i=>({...i})) ?? [];
+    setEditItems(existing.length > 0 ? existing : [{ label: "", quantity: 1, unit_price: 0 }]);
     setEditDueDate(inv.due_date?.slice(0,10) ?? "");
     setEditCurrency(inv.currency);
     setEditAgentId(inv.agent_id ?? "");
@@ -691,12 +692,26 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
               <>
               <div className="overflow-x-auto">
                 {/* Table header */}
-                <div className="grid min-w-[380px] grid-cols-12 gap-2 border-b border-white/5 px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-white/30">
+                <div className={`grid min-w-[380px] gap-2 border-b border-white/5 px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-white/30 ${editing ? "grid-cols-12" : "grid-cols-12"}`}>
                   <div className="col-span-5">{lang==="fr"?"Description":"Description"}</div>
                   <div className="col-span-2 text-center">{lang==="fr"?"Qté":"Qty"}</div>
                   <div className="col-span-2 text-right">{lang==="fr"?"P.U.":"Unit"}</div>
-                  <div className="col-span-3 text-right">{lang==="fr"?"Total":"Total"}</div>
+                  <div className={editing ? "col-span-2 text-right" : "col-span-3 text-right"}>{lang==="fr"?"Total":"Total"}</div>
+                  {editing && <div className="col-span-1"/>}
                 </div>
+
+                {/* Empty state (read mode) */}
+                {!editing && (selected.billing_items ?? []).length === 0 && (
+                  <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
+                    <FileText className="h-7 w-7 text-white/10"/>
+                    <p className="text-sm text-white/30">{lang==="fr"?"Aucun article enregistré":"No items recorded"}</p>
+                    {isAdmin && (
+                      <p className="text-[11px] text-white/20">
+                        {lang==="fr"?"→ Cliquez sur Modifier pour ajouter des articles":"→ Click Edit to add items"}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {(editing ? editItems : (selected.billing_items??[])).map((item,idx)=>(
                   <div key={idx} className="grid min-w-[380px] grid-cols-12 gap-2 items-center border-b border-white/5 px-4 py-3 last:border-0">
@@ -721,12 +736,10 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
                           {fmt(Number(item.quantity)*Number(item.unit_price))}
                         </div>
                         <div className="col-span-1 flex justify-end">
-                          {editItems.length>1&&(
-                            <button onClick={()=>removeEditItem(idx)}
-                              className="flex h-6 w-6 items-center justify-center rounded text-white/25 hover:text-red-400">
-                              <X className="h-3.5 w-3.5"/>
-                            </button>
-                          )}
+                          <button onClick={()=>removeEditItem(idx)}
+                            className="flex h-6 w-6 items-center justify-center rounded text-white/25 transition-colors hover:text-red-400">
+                            <X className="h-3.5 w-3.5"/>
+                          </button>
                         </div>
                       </>
                     ) : (
