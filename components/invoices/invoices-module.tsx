@@ -96,6 +96,7 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
 
   const isAdmin = profile.role === "admin_global" || profile.role === "admin_org";
   const isClient = profile.role === "client";
+  const isAgent = profile.role === "agent";
 
   // List state
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -401,18 +402,32 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
         </div>
 
         {/* KPIs */}
-        <div className="grid grid-cols-3 gap-2">
-          {[
+        {(() => {
+          const totalComm = invoices.reduce((s,i)=>s+(
+            i.comm_type==="percentage"&&i.comm_value!=null ? i.total*i.comm_value/100
+            : i.comm_value!=null ? i.comm_value : 0
+          ),0);
+          const kpis = isAgent ? [
+            { label: lang==="fr"?"Factures":"Invoices",       value: String(invoices.length),   color:"text-white" },
+            { label: lang==="fr"?"Comm. totale":"Total comm.", value: fmt(totalComm),            color:"text-violet-400" },
+            { label: lang==="fr"?"Paiements déclarés":"Declared",
+              value: `${invoices.filter(i=>i.status==="payment_claimed").length}`,               color:"text-blue-400" },
+          ] : [
             { label: lang==="fr"?"Total":"Total",     value: fmt(invoices.reduce((s,i)=>s+i.total,0)), color:"text-white" },
-            { label: lang==="fr"?"Payé":"Paid",       value: fmt(totalPaid),    color:"text-emerald-400" },
-            { label: lang==="fr"?"En attente":"Due",  value: fmt(totalPending), color:"text-amber-400" },
-          ].map(k=>(
-            <div key={k.label} className="rounded-xl border border-white/8 bg-white/3 p-3">
-              <p className={cn("text-base font-bold truncate", k.color)}>{k.value}</p>
-              <p className="text-[11px] text-white/40">{k.label}</p>
+            { label: lang==="fr"?"Payé":"Paid",       value: fmt(totalPaid),                          color:"text-emerald-400" },
+            { label: lang==="fr"?"En attente":"Due",  value: fmt(totalPending),                       color:"text-amber-400" },
+          ];
+          return (
+            <div className="grid grid-cols-3 gap-2">
+              {kpis.map(k=>(
+                <div key={k.label} className="rounded-xl border border-white/8 bg-white/3 p-3">
+                  <p className={cn("text-base font-bold truncate", k.color)}>{k.value}</p>
+                  <p className="text-[11px] text-white/40">{k.label}</p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          );
+        })()}
 
         {/* Filter tabs */}
         <div className="flex flex-wrap gap-1.5">
@@ -464,7 +479,7 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
                           <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",STATUS_COLORS[inv.status])}>
                             {stL[inv.status]}
                           </span>
-                          {isAdmin && (
+                          {(isAdmin || isAgent) && (
                             <p className="text-[11px] text-white/40 truncate">{clientName(inv)}</p>
                           )}
                         </div>
@@ -539,7 +554,7 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
 
           {/* Client + meta */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {isAdmin && (
+            {(isAdmin || isAgent) && (
               <div className="rounded-xl border border-white/8 bg-white/3 p-3">
                 <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-white/35">
                   <User className="h-3 w-3"/> {lang==="fr"?"Client":"Client"}
@@ -675,6 +690,32 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
               </>
             )}
           </div>
+
+          {/* Agent: commission en lecture seule */}
+          {isAgent && !editing && selected.comm_value != null && (
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/8 p-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-violet-400/70">
+                {lang==="fr"?"Votre commission":"Your commission"}
+              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-white/50">
+                  {selected.comm_type === "percentage"
+                    ? `${selected.comm_value}% du total`
+                    : lang==="fr"?"Montant fixe":"Fixed amount"}
+                </p>
+                <p className="text-xl font-bold text-violet-300">
+                  {selected.comm_type === "percentage"
+                    ? fmt(selected.total * selected.comm_value / 100)
+                    : fmt(selected.comm_value)}
+                </p>
+              </div>
+              <p className="mt-1 text-[11px] text-white/30">
+                {lang==="fr"
+                  ? `Sur un total facture de ${fmt(selected.total)}`
+                  : `On a total invoice of ${fmt(selected.total)}`}
+              </p>
+            </div>
+          )}
 
           {/* Commission section (admin edit) */}
           {isAdmin && editing && (
@@ -981,18 +1022,31 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
                     + {lang==="fr"?"Ajouter":"Add"}
                   </button>
                 </div>
+                {/* Column headers */}
+                <div className="mb-1 flex items-center gap-2 px-1">
+                  <p className="flex-1 min-w-0 text-[10px] font-medium uppercase tracking-wider text-white/30">
+                    {lang==="fr"?"Description":"Description"}
+                  </p>
+                  <p className="w-14 text-center text-[10px] font-medium uppercase tracking-wider text-white/30">
+                    {lang==="fr"?"Qté":"Qty"}
+                  </p>
+                  <p className="w-24 text-right text-[10px] font-medium uppercase tracking-wider text-white/30">
+                    {lang==="fr"?"Prix unit.":"Unit price"}
+                  </p>
+                  <div className="w-4"/>
+                </div>
                 <div className="space-y-2">
                   {newInvoice.items.map((item,idx)=>(
                     <div key={idx} className="flex items-center gap-2">
                       <input value={item.label}
                         onChange={e=>setNewInvoice(n=>({...n,items:n.items.map((it,i)=>i===idx?{...it,label:e.target.value}:it)}))}
-                        placeholder={lang==="fr"?"Description":"Description"}
-                        className="flex-1 min-w-0 rounded-xl border border-white/10 bg-[#16161c] px-3 py-2 text-sm text-white outline-none focus:border-white/30 placeholder:text-white/25"/>
+                        placeholder={lang==="fr"?"ex: Création société LTD UK":"e.g. LTD company creation"}
+                        className="flex-1 min-w-0 rounded-xl border border-white/10 bg-[#16161c] px-3 py-2 text-sm text-white outline-none focus:border-white/30 placeholder:text-white/20"/>
                       <input type="number" value={item.quantity} min={1}
                         onChange={e=>setNewInvoice(n=>({...n,items:n.items.map((it,i)=>i===idx?{...it,quantity:Number(e.target.value)}:it)}))}
                         className="w-14 rounded-xl border border-white/10 bg-[#16161c] px-2 py-2 text-center text-sm text-white outline-none focus:border-white/30"/>
-                      <input type="number" value={item.unit_price} min={0} step={0.01}
-                        onChange={e=>setNewInvoice(n=>({...n,items:n.items.map((it,i)=>i===idx?{...it,unit_price:Number(e.target.value)}:it)}))}
+                      <input type="number" value={item.unit_price===0?"":item.unit_price} min={0} step={0.01}
+                        onChange={e=>setNewInvoice(n=>({...n,items:n.items.map((it,i)=>i===idx?{...it,unit_price:Number(e.target.value)||0}:it)}))}
                         placeholder="0.00"
                         className="w-24 rounded-xl border border-white/10 bg-[#16161c] px-2 py-2 text-right text-sm text-white outline-none focus:border-white/30 placeholder:text-white/25"/>
                       {newInvoice.items.length>1&&(
@@ -1004,8 +1058,11 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
                     </div>
                   ))}
                 </div>
-                <div className="mt-2 text-right text-sm font-bold text-white">
-                  Total : {fmt(newInvoice.items.reduce((s,i)=>s+(i.quantity*i.unit_price),0))}
+                <div className="mt-3 flex items-center justify-between rounded-xl border border-white/8 bg-white/3 px-4 py-2.5">
+                  <p className="text-xs text-white/40">{lang==="fr"?"Total TTC":"Total"}</p>
+                  <p className="text-sm font-bold text-white">
+                    {fmt(newInvoice.items.reduce((s,i)=>s+(i.quantity*i.unit_price),0))} {newInvoice.currency}
+                  </p>
                 </div>
               </div>
 

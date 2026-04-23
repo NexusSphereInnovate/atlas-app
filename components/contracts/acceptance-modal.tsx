@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileText, Check, AlertCircle } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
 import { Spinner } from "@/components/ui/spinner";
@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import type { UserProfile } from "@/types/profile";
 
-const CGV_TEXT = `CONDITIONS GÉNÉRALES DE VENTE — ATLAS INCORPORATE
+const CGV_FALLBACK = `CONDITIONS GÉNÉRALES DE VENTE — ATLAS INCORPORATE
 
 1. OBJET
 Les présentes Conditions Générales de Vente (CGV) régissent les prestations fournies par Atlas Incorporate (ci-après "le Prestataire") au Client.
@@ -17,19 +17,16 @@ Les présentes Conditions Générales de Vente (CGV) régissent les prestations 
 Le Prestataire fournit des services de création et d'administration de sociétés au Royaume-Uni, ainsi que des services connexes (succursales, enregistrements, conformité).
 
 3. PRIX ET PAIEMENT
-Les prix sont indiqués en livres sterling (GBP) hors taxes. Le paiement est dû à réception de la facture. En cas de retard, des pénalités de 3% par mois sont applicables.
+Le paiement est dû à réception de la facture. En cas de retard, des pénalités de 3% par mois sont applicables.
 
 4. ENGAGEMENT DU CLIENT
-En acceptant ces conditions, le Client reconnaît et s'engage à :
-— Fournir des informations exactes et complètes
-— Régler les sommes dues dans les délais convenus
-— Ne pas utiliser les services à des fins illicites
+En acceptant ces conditions, le Client reconnaît et s'engage à fournir des informations exactes, régler les sommes dues dans les délais convenus, et ne pas utiliser les services à des fins illicites.
 
 5. RESPONSABILITÉ
 Le Prestataire ne peut être tenu responsable de délais imputables aux autorités administratives ou à des informations erronées fournies par le Client.
 
 6. DROIT APPLICABLE
-Les présentes CGV sont soumises au droit anglais (England and Wales).
+Les présentes CGV sont soumises au droit suisse (Canton de Vaud).
 
 7. ACCEPTATION
 L'acceptation électronique de ces CGV constitue une signature valide et engageante.`;
@@ -55,12 +52,35 @@ export function AcceptanceModal({
   onClose,
   onAccepted,
 }: AcceptanceModalProps) {
+  const [cgvText, setCgvText] = useState<string | null>(null);
+  const [activeCgvVersion, setActiveCgvVersion] = useState(cgvVersion);
+  const [loadingCgv, setLoadingCgv] = useState(true);
   const [accepted, setAccepted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Charger les CGV depuis les paramètres admin
+  useEffect(() => {
+    async function fetchCgv() {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("org_settings")
+        .select("cgv_content, cgv_current_version")
+        .eq("org_id", profile.org_id ?? "00000000-0000-0000-0000-000000000001")
+        .single();
+      if (data?.cgv_content) {
+        setCgvText(data.cgv_content);
+        setActiveCgvVersion(data.cgv_current_version ?? cgvVersion);
+      } else {
+        setCgvText(CGV_FALLBACK);
+      }
+      setLoadingCgv(false);
+    }
+    fetchCgv();
+  }, [profile.org_id, cgvVersion]);
+
   async function handleAccept() {
-    if (!accepted) return;
+    if (!accepted || !cgvText) return;
     setSubmitting(true);
     setError(null);
 
@@ -73,8 +93,8 @@ export function AcceptanceModal({
       first_name: profile.first_name ?? "",
       last_name: profile.last_name ?? "",
       email: profile.email ?? "",
-      cgv_version: cgvVersion,
-      acceptance_snapshot: CGV_TEXT,
+      cgv_version: activeCgvVersion,
+      acceptance_snapshot: cgvText,
     });
 
     if (acceptError) {
@@ -86,7 +106,7 @@ export function AcceptanceModal({
     await supabase.from("invoices").update({
       cgv_accepted: true,
       cgv_accepted_at: new Date().toISOString(),
-      cgv_version: cgvVersion,
+      cgv_version: activeCgvVersion,
     }).eq("id", invoiceId);
 
     setSubmitting(false);
@@ -97,17 +117,28 @@ export function AcceptanceModal({
     <Modal
       open
       onClose={onClose}
-      title="Acceptation des conditions de vente"
+      title="Conditions générales de vente"
       description={`Facture ${invoiceNumber} — ${formatCurrency(amount, currency)}`}
       size="lg"
     >
       <div className="space-y-5">
         {/* CGV Text */}
         <div className="max-h-64 overflow-y-auto rounded-xl border border-white/8 bg-black/20 p-4">
-          <pre className="whitespace-pre-wrap text-xs leading-relaxed text-white/60 font-sans">
-            {CGV_TEXT}
-          </pre>
+          {loadingCgv ? (
+            <div className="flex items-center justify-center py-8">
+              <Spinner />
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap text-xs leading-relaxed text-white/60 font-sans">
+              {cgvText}
+            </pre>
+          )}
         </div>
+
+        {/* Version badge */}
+        {!loadingCgv && (
+          <p className="text-[11px] text-white/25 text-right">Version : {activeCgvVersion}</p>
+        )}
 
         {/* Engagement summary */}
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 p-4">
@@ -161,7 +192,7 @@ export function AcceptanceModal({
           </button>
           <button
             onClick={handleAccept}
-            disabled={!accepted || submitting}
+            disabled={!accepted || submitting || loadingCgv}
             className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white transition-all hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {submitting ? <Spinner size="sm" /> : <FileText className="h-4 w-4" />}
