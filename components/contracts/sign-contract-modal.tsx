@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Pen, Shield, CheckCircle } from "lucide-react";
+import { X, Pen, Shield, CheckCircle, FileText } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useLang } from "@/lib/contexts/language-context";
@@ -32,6 +32,33 @@ export function SignContractModal({ contract, profile, onClose, onSigned }: Sign
   const [typedName, setTypedName] = useState("");
   const [signing, setSigning] = useState(false);
   const [signed, setSigned] = useState(false);
+
+  // CGV viewer
+  const [showCgv, setShowCgv] = useState(false);
+  const [cgvText, setCgvText] = useState<string | null>(null);
+  const [loadingCgv, setLoadingCgv] = useState(false);
+
+  async function openCgv() {
+    setShowCgv(true);
+    if (cgvText !== null) return; // already fetched
+    setLoadingCgv(true);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("org_settings")
+        .select("cgv_content")
+        .eq("org_id", profile.org_id ?? "00000000-0000-0000-0000-000000000001")
+        .single();
+      setCgvText(data?.cgv_content ?? (lang === "fr"
+        ? "Les conditions générales de vente ne sont pas encore disponibles. Veuillez contacter l'équipe Atlas."
+        : "General Terms & Conditions are not yet available. Please contact the Atlas team."));
+    } catch {
+      setCgvText(lang === "fr"
+        ? "Impossible de charger les CGV. Veuillez réessayer."
+        : "Could not load Terms & Conditions. Please try again.");
+    }
+    setLoadingCgv(false);
+  }
 
   const fullName = `${profile.first_name ?? ""} ${profile.last_name ?? ""}`.trim();
   const allChecked = checks.readContract && checks.acceptCgv && checks.commitPay;
@@ -157,50 +184,74 @@ export function SignContractModal({ contract, profile, onClose, onSigned }: Sign
             <div className="shrink-0 space-y-4 overflow-y-auto p-5">
               {/* Checkboxes */}
               <div className="space-y-2">
-                {[
-                  {
-                    key: "readContract" as const,
-                    text: lang === "fr"
-                      ? "J'ai lu et compris l'intégralité du contrat ci-dessus."
-                      : "I have read and understood the entire contract above.",
-                  },
-                  {
-                    key: "acceptCgv" as const,
-                    text: lang === "fr"
-                      ? "J'accepte les Conditions Générales de Vente et m'engage à respecter les termes du présent contrat."
-                      : "I accept the General Terms & Conditions and agree to comply with this contract.",
-                  },
-                  {
-                    key: "commitPay" as const,
-                    text: lang === "fr"
-                      ? "Je m'engage à régler les sommes dues dans les délais convenus."
-                      : "I commit to paying the amounts due within the agreed timeframes.",
-                  },
-                ].map(({ key, text }) => (
-                  <label
-                    key={key}
-                    className={cn(
-                      "flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors",
-                      checks[key]
-                        ? "border-emerald-500/30 bg-emerald-500/8"
-                        : "border-white/10 bg-white/3 hover:bg-white/5"
-                    )}
-                  >
-                    <div className={cn(
-                      "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
-                      checks[key] ? "border-emerald-500 bg-emerald-500" : "border-white/20 bg-white/5"
-                    )}>
-                      {checks[key] && <CheckCircle className="h-3 w-3 text-white" />}
-                    </div>
-                    <input
-                      type="checkbox"
-                      className="hidden"
-                      checked={checks[key]}
-                      onChange={(e) => setChecks((c) => ({ ...c, [key]: e.target.checked }))}
-                    />
-                    <span className="text-xs leading-relaxed text-white/70">{text}</span>
-                  </label>
-                ))}
+                {/* readContract */}
+                {(["readContract", "commitPay"] as const).map((key) => {
+                  const text = key === "readContract"
+                    ? (lang === "fr" ? "J'ai lu et compris l'intégralité du contrat ci-dessus." : "I have read and understood the entire contract above.")
+                    : (lang === "fr" ? "Je m'engage à régler les sommes dues dans les délais convenus." : "I commit to paying the amounts due within the agreed timeframes.");
+                  return (
+                    <label
+                      key={key}
+                      className={cn(
+                        "flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors",
+                        checks[key]
+                          ? "border-emerald-500/30 bg-emerald-500/8"
+                          : "border-white/10 bg-white/3 hover:bg-white/5"
+                      )}
+                    >
+                      <div className={cn(
+                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                        checks[key] ? "border-emerald-500 bg-emerald-500" : "border-white/20 bg-white/5"
+                      )}>
+                        {checks[key] && <CheckCircle className="h-3 w-3 text-white" />}
+                      </div>
+                      <input
+                        type="checkbox"
+                        className="hidden"
+                        checked={checks[key]}
+                        onChange={(e) => setChecks((c) => ({ ...c, [key]: e.target.checked }))}
+                      />
+                      <span className="text-xs leading-relaxed text-white/70">{text}</span>
+                    </label>
+                  );
+                })}
+
+                {/* acceptCgv — with clickable CGV link */}
+                <label
+                  className={cn(
+                    "flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors",
+                    checks.acceptCgv
+                      ? "border-emerald-500/30 bg-emerald-500/8"
+                      : "border-white/10 bg-white/3 hover:bg-white/5"
+                  )}
+                >
+                  <div className={cn(
+                    "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                    checks.acceptCgv ? "border-emerald-500 bg-emerald-500" : "border-white/20 bg-white/5"
+                  )}>
+                    {checks.acceptCgv && <CheckCircle className="h-3 w-3 text-white" />}
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="hidden"
+                    checked={checks.acceptCgv}
+                    onChange={(e) => setChecks((c) => ({ ...c, acceptCgv: e.target.checked }))}
+                  />
+                  <span className="text-xs leading-relaxed text-white/70">
+                    {lang === "fr" ? "J'accepte les " : "I accept the "}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); openCgv(); }}
+                      className="inline-flex items-center gap-1 text-blue-400 underline underline-offset-2 hover:text-blue-300 transition-colors"
+                    >
+                      <FileText className="h-3 w-3" />
+                      {lang === "fr" ? "Conditions Générales de Vente" : "General Terms & Conditions"}
+                    </button>
+                    {lang === "fr"
+                      ? " et m'engage à respecter les termes du présent contrat."
+                      : " and agree to comply with this contract."}
+                  </span>
+                </label>
               </div>
 
               {/* Typed name */}
@@ -252,6 +303,53 @@ export function SignContractModal({ contract, profile, onClose, onSigned }: Sign
           </div>
         )}
       </div>
+
+      {/* CGV Overlay */}
+      {showCgv && (
+        <div className="absolute inset-0 z-10 flex flex-col rounded-t-2xl sm:rounded-2xl bg-[#111115]">
+          <div className="flex shrink-0 items-center justify-between border-b border-white/8 px-5 py-4">
+            <div>
+              <p className="font-semibold text-white">
+                {lang === "fr" ? "Conditions Générales de Vente" : "General Terms & Conditions"}
+              </p>
+              <p className="text-xs text-white/40">
+                {lang === "fr" ? "Atlas Incorporate — AS International Group LTD" : "Atlas Incorporate — AS International Group LTD"}
+              </p>
+            </div>
+            <button
+              onClick={() => setShowCgv(false)}
+              className="text-white/40 transition-colors hover:text-white"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-5">
+            {loadingCgv ? (
+              <div className="flex h-full items-center justify-center">
+                <Spinner size="lg" />
+              </div>
+            ) : (
+              <div className="whitespace-pre-wrap text-xs leading-relaxed text-white/70">
+                {cgvText}
+              </div>
+            )}
+          </div>
+
+          <div className="shrink-0 border-t border-white/8 p-4">
+            <button
+              onClick={() => {
+                setChecks((c) => ({ ...c, acceptCgv: true }));
+                setShowCgv(false);
+              }}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white transition-all hover:bg-emerald-500"
+            >
+              <CheckCircle className="h-4 w-4" />
+              {lang === "fr" ? "J'ai lu et j'accepte les CGV" : "I have read and accept the T&Cs"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

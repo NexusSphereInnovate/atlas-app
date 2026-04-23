@@ -359,16 +359,7 @@ function ContractDocument({ data }: { data: ContractData }) {
           P("La portée exacte des prestations est définie dans les documents commerciaux annexes.", { marginTop: 4 }),
         ),
 
-      ),
-      CE(Footer, null),
-    ),
-
-    // ══════════════════════════════════════════════════════════════════════════
-    // PAGE 2 — Art. 3 → 7
-    // ══════════════════════════════════════════════════════════════════════════
-    CE(Page, { size: "A4", style: S.page },
-      CE(Header, { date: contractDate }),
-      CE(View, { style: S.body },
+        HR(),
 
         CE(Art, { num: "3", title: "Nature de l\u2019engagement" },
           P("Le Prestataire est tenu à une obligation de moyens. Il est expressément convenu qu\u2019aucune garantie de résultat n\u2019est fournie, notamment en ce qui concerne :"),
@@ -378,7 +369,16 @@ function ContractDocument({ data }: { data: ContractData }) {
           B("La validation fiscale ou réglementaire d\u2019une structure"),
         ),
 
-        HR(),
+      ),
+      CE(Footer, null),
+    ),
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // PAGE 2 — Art. 4 → 7
+    // ══════════════════════════════════════════════════════════════════════════
+    CE(Page, { size: "A4", style: S.page },
+      CE(Header, { date: contractDate }),
+      CE(View, { style: S.body },
 
         CE(Art, { num: "4", title: "Recours à des tiers" },
           P("Le Client reconnaît que l\u2019exécution des prestations peut impliquer l\u2019intervention de tiers indépendants. Le Prestataire agit uniquement en qualité d\u2019intermédiaire et ne saurait être tenu responsable :"),

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Receipt, Plus, Trash2, X, Edit2, Save, ChevronRight,
   CheckCircle, Clock, AlertCircle, ArrowLeft, FileText,
-  User, Calendar, CreditCard,
+  User, Calendar, CreditCard, Download,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -67,6 +67,7 @@ interface Invoice {
   payment_claimed_at: string | null;
   created_at: string;
   cgv_accepted: boolean | null;
+  cgv_accepted_at: string | null;
   cgv_version: string | null;
   client_id: string;
   agent_id: string | null;
@@ -75,10 +76,6 @@ interface Invoice {
   payment_method: string | null;
   payment_ref: string | null;
   payment_link: string | null;
-  // Parrainage client
-  referrer_client_id: string | null;
-  referrer_comm_rate: number | null;
-  referrer?: { first_name: string | null; last_name: string | null } | null;
   client?: { first_name: string | null; last_name: string | null } | null;
   billing_items?: BillingItem[];
 }
@@ -90,10 +87,6 @@ const EMPTY_FORM = {
   items: [{ label: "", quantity: 1, unit_price: 0 }] as BillingItem[],
   commType: "percentage" as "fixed" | "percentage",
   commValue: "",
-  // Parrainage client
-  referrerEnabled: false,
-  referrerId: "",
-  referrerRate: "5",
 };
 
 export function InvoicesModule({ profile }: InvoicesModuleProps) {
@@ -114,6 +107,9 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
   // Detail / selected invoice
   const [selected, setSelected] = useState<Invoice | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // PDF download
+  const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
 
   // Edit mode (admin)
   const [editing, setEditing] = useState(false);
@@ -170,11 +166,9 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
     let q = sb.from("invoices").select(`
       id, invoice_number, status, total, subtotal, tax_rate, tax_amount,
       currency, due_date, paid_at, payment_claimed_at, created_at,
-      cgv_accepted, cgv_version, client_id, agent_id, comm_type, comm_value,
+      cgv_accepted, cgv_accepted_at, cgv_version, client_id, agent_id, comm_type, comm_value,
       payment_method, payment_ref, payment_link,
-      referrer_client_id, referrer_comm_rate,
-      client:user_profiles!invoices_client_id_fkey(first_name, last_name),
-      referrer:user_profiles!invoices_referrer_client_id_fkey(first_name, last_name)
+      client:user_profiles!invoices_client_id_fkey(first_name, last_name)
     `).order("created_at", { ascending: false });
     if (isClient) q = q.eq("client_id", profile.id);
     else if (profile.role === "agent") q = q.eq("agent_id", profile.id);
@@ -268,21 +262,6 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
     await load();
   }
 
-  // Crée la commission parrainage (atlas_circle_entries type "referral")
-  async function createReferralCommission(inv: Invoice, sb: ReturnType<typeof createClient>) {
-    if (!inv.referrer_client_id || !inv.referrer_comm_rate) return;
-    const commAmt = Math.round(inv.total * inv.referrer_comm_rate / 100);
-    if (commAmt <= 0) return;
-    await sb.from("atlas_circle_entries").insert({
-      client_id: inv.referrer_client_id,
-      type: "referral",
-      amount: commAmt,
-      label: `Parrainage — Facture ${inv.invoice_number} (${inv.referrer_comm_rate}% de ${Math.round(inv.total)} ${inv.currency ?? "CHF"})`,
-      ref_id: inv.id,
-      added_by: profile.id,
-    });
-  }
-
   async function updateStatus(id:string, status:InvoiceStatus) {
     setUpdatingStatus(id);
     const sb = createClient();
@@ -304,8 +283,6 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
             ref_id: id,
             added_by: profile.id,
           });
-          // Commission parrainage si applicable
-          if (inv) await createReferralCommission(inv, sb);
         }
       }
       toast("success", lang==="fr"?"Statut mis à jour":"Status updated");
@@ -354,15 +331,67 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
       ref_id: selected.id,
       added_by: profile.id,
     });
-    // Commission parrainage si un client parrain est renseigné
-    await createReferralCommission(selected, sb);
-
     toast("success", lang==="fr"
       ? `Paiement confirmé ✓ (+${pts} points Circle)`
       : `Payment confirmed ✓ (+${pts} Circle points)`);
     setSelected(s => s ? { ...s, status:"paid", paid_at: now } : s);
     setUpdatingStatus(null);
     await load();
+  }
+
+  // ── Download PDF ──────────────────────────────────────────────────
+  async function downloadInvoicePdf(inv: Invoice) {
+    setDownloadingPdf(inv.id);
+    try {
+      const sb = createClient();
+      const { data: cp } = await sb.from("user_profiles")
+        .select("first_name,last_name,email,billing_address,billing_city,billing_postal_code,billing_country")
+        .eq("id", inv.client_id).single();
+
+      // Load items if not already loaded
+      let items = inv.billing_items ?? [];
+      if (items.length === 0) {
+        const { data: fetchedItems } = await sb.from("billing_items")
+          .select("id,label,quantity,unit_price").eq("invoice_id", inv.id).order("id");
+        items = (fetchedItems ?? []) as BillingItem[];
+      }
+
+      const res = await fetch("/api/invoices/generate-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoiceNumber: inv.invoice_number,
+          invoiceDate: new Date(inv.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }),
+          dueDate: inv.due_date ? new Date(inv.due_date).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) : undefined,
+          currency: inv.currency,
+          clientName: cp ? `${cp.first_name ?? ""} ${cp.last_name ?? ""}`.trim() : clientName(inv),
+          clientAddress:  cp?.billing_address      ?? "",
+          clientPostal:   cp?.billing_postal_code  ?? "",
+          clientCity:     cp?.billing_city         ?? "",
+          clientCountry:  cp?.billing_country      ?? "",
+          clientEmail:    cp?.email                ?? "",
+          items: items.map(i => ({ label: i.label, quantity: i.quantity, unit_price: i.unit_price })),
+          totalAmount: inv.total,
+          status: inv.status,
+          cgvAccepted: inv.cgv_accepted,
+          cgvAcceptedAt: inv.cgv_accepted_at ?? undefined,
+          paymentClaimedAt: inv.payment_claimed_at ?? undefined,
+          paidAt: inv.paid_at ?? undefined,
+          paymentMethod: inv.payment_method ?? undefined,
+        }),
+      });
+      if (!res.ok) { toast("error", "Erreur génération PDF"); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `facture-${inv.invoice_number.toLowerCase()}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast("error", "Erreur téléchargement PDF");
+    }
+    setDownloadingPdf(null);
   }
 
   // ── Create ────────────────────────────────────────────────────────
@@ -385,9 +414,6 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
       status:"draft",
       comm_type: newInvoice.agentId&&newInvoice.commValue?newInvoice.commType:null,
       comm_value: newInvoice.agentId&&newInvoice.commValue?Number(newInvoice.commValue):null,
-      // Parrainage client (seulement si activé et referrer sélectionné)
-      referrer_client_id: newInvoice.referrerEnabled && newInvoice.referrerId ? newInvoice.referrerId : null,
-      referrer_comm_rate: newInvoice.referrerEnabled && newInvoice.referrerId ? Number(newInvoice.referrerRate)||5 : null,
     }).select("id").single();
     if (error||!inv) { toast("error", error?.message??"Erreur"); setCreating(false); return; }
     await sb.from("billing_items").insert(
@@ -558,6 +584,11 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
             {/* Admin actions */}
             {isAdmin && !editing && (
               <div className="flex shrink-0 items-center gap-2">
+                <button onClick={()=>downloadInvoicePdf(selected)} disabled={downloadingPdf===selected.id}
+                  className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#16161c] px-3 py-2 text-xs font-medium text-white/60 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40">
+                  {downloadingPdf===selected.id?<Spinner size="sm"/>:<Download className="h-3.5 w-3.5"/>}
+                  PDF
+                </button>
                 <button onClick={()=>startEdit(selected)}
                   className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#16161c] px-3 py-2 text-xs font-medium text-white/60 transition-colors hover:bg-white/10 hover:text-white">
                   <Edit2 className="h-3.5 w-3.5"/>
@@ -724,30 +755,6 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
             )}
           </div>
 
-          {/* Admin: info parrainage client */}
-          {isAdmin && !editing && selected.referrer_client_id && selected.referrer_comm_rate != null && (
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-emerald-400/70">
-                {lang==="fr"?"Parrainage client":"Client referral"}
-              </p>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-white/70">
-                    {selected.referrer
-                      ? `${selected.referrer.first_name ?? ""} ${selected.referrer.last_name ?? ""}`.trim()
-                      : "—"}
-                  </p>
-                  <p className="text-[11px] text-white/35">
-                    {selected.referrer_comm_rate}% — {lang==="fr"?"versé au paiement":"paid on confirmation"}
-                  </p>
-                </div>
-                <p className="text-lg font-bold text-emerald-300">
-                  {fmt(selected.total * selected.referrer_comm_rate / 100)}
-                </p>
-              </div>
-            </div>
-          )}
-
           {/* Agent: commission en lecture seule */}
           {isAgent && !editing && selected.comm_value != null && (
             <div className="rounded-xl border border-violet-500/20 bg-violet-500/8 p-4">
@@ -840,7 +847,10 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
                 </p>
                 {selected.payment_claimed_at && (
                   <p className="mt-1 text-[11px] text-white/35">
-                    {lang==="fr"?"Déclaré le":"Declared on"} {formatDate(selected.payment_claimed_at)}
+                    {lang==="fr"?"Déclaré le":"Declared on"}{" "}
+                    {new Date(selected.payment_claimed_at).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}
+                    {" "}{lang==="fr"?"à":"at"}{" "}
+                    {new Date(selected.payment_claimed_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 )}
               </div>
@@ -949,14 +959,23 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
           {selected.status === "paid" && (
             <div className="flex items-center gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3">
               <CheckCircle className="h-5 w-5 shrink-0 text-emerald-400"/>
-              <div>
+              <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white">
                   {lang==="fr"?"Facture payée ✓":"Invoice paid ✓"}
                 </p>
                 {selected.paid_at && (
-                  <p className="text-xs text-white/40">{formatDate(selected.paid_at)}</p>
+                  <p className="text-xs text-white/40">
+                    {new Date(selected.paid_at).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}
+                    {" "}{lang==="fr"?"à":"at"}{" "}
+                    {new Date(selected.paid_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+                  </p>
                 )}
               </div>
+              <button onClick={()=>downloadInvoicePdf(selected)} disabled={downloadingPdf===selected.id}
+                className="shrink-0 flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-40">
+                {downloadingPdf===selected.id?<Spinner size="sm"/>:<Download className="h-3.5 w-3.5"/>}
+                PDF
+              </button>
             </div>
           )}
         </div>
@@ -1149,75 +1168,6 @@ export function InvoicesModule({ profile }: InvoicesModuleProps) {
                       onChange={e=>setNewInvoice(n=>({...n,commValue:e.target.value}))}
                       type="number" placeholder={newInvoice.commType==="percentage"?"10":"500"}
                       className="flex-1 rounded-xl border border-white/10 bg-[#16161c] px-3 py-1.5 text-sm text-white outline-none placeholder:text-white/25"/>
-                  </div>
-                )}
-              </div>
-
-              {/* ── Parrainage client ─────────────────────────────── */}
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
-                {/* Checkbox opt-in */}
-                <label className="flex cursor-pointer items-start gap-3">
-                  <div
-                    onClick={() => setNewInvoice(n => ({ ...n, referrerEnabled: !n.referrerEnabled, referrerId: "" }))}
-                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-all ${
-                      newInvoice.referrerEnabled ? "border-emerald-500 bg-emerald-500" : "border-white/20 bg-transparent"
-                    }`}
-                  >
-                    {newInvoice.referrerEnabled && <CheckCircle className="h-3 w-3 text-white"/>}
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-emerald-300">
-                      {lang==="fr"?"Parrainage client":"Client referral"}
-                    </p>
-                    <p className="text-[11px] text-white/40">
-                      {lang==="fr"
-                        ?"Ce client a été recommandé par un autre client — commission sur paiement"
-                        :"This client was referred by another client — commission on payment"}
-                    </p>
-                  </div>
-                </label>
-
-                {/* Dropdown + taux (visible seulement si coché) */}
-                {newInvoice.referrerEnabled && (
-                  <div className="space-y-2 pt-1">
-                    <div>
-                      <label className="mb-1 block text-[11px] font-medium text-white/40">
-                        {lang==="fr"?"Client parrain (doit être dans la base)":"Referring client (must be in DB)"}
-                      </label>
-                      <select
-                        value={newInvoice.referrerId}
-                        onChange={e => setNewInvoice(n => ({ ...n, referrerId: e.target.value }))}
-                        className="w-full rounded-xl border border-white/10 bg-[#1a1a20] px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/50"
-                      >
-                        <option value="">{lang==="fr"?"— Sélectionner le client parrain —":"— Select referring client —"}</option>
-                        {clients
-                          .filter(c => c.id !== newInvoice.clientId) // Exclude the invoice client
-                          .map(c => (
-                            <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>
-                          ))}
-                      </select>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1">
-                        <label className="mb-1 block text-[11px] font-medium text-white/40">
-                          {lang==="fr"?"Taux commission":"Commission rate"}
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number" min="0" max="50" step="0.5"
-                            value={newInvoice.referrerRate}
-                            onChange={e => setNewInvoice(n => ({ ...n, referrerRate: e.target.value }))}
-                            className="w-24 rounded-xl border border-white/10 bg-[#16161c] px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/50"
-                          />
-                          <span className="text-sm text-white/50">%</span>
-                          {newInvoice.referrerId && newInvoice.referrerRate && (
-                            <span className="text-xs text-emerald-400 font-medium">
-                              = {fmt(newInvoice.items.reduce((s,i)=>s+i.quantity*i.unit_price,0) * Number(newInvoice.referrerRate) / 100)} {lang==="fr"?"au paiement":"on payment"}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
                   </div>
                 )}
               </div>

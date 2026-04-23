@@ -6,6 +6,7 @@ import {
   X, User, Calendar, DollarSign, Send, Pen, ArrowLeft,
   ChevronRight, Shield, AlertCircle, FileText, Sparkles,
   Building2, Trash2, PackagePlus, ChevronDown, Download,
+  Edit2, Save,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { useCurrency } from "@/lib/contexts/currency-context";
@@ -124,8 +125,12 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
     // Services / items
     items: [] as ContractItem[],
     currency: "CHF",
-    clientReferralRate: "5",
   });
+
+  // Contract items editing
+  const [editingContractItems, setEditingContractItems] = useState(false);
+  const [contractEditItems, setContractEditItems] = useState<ContractItem[]>([]);
+  const [savingContractItems, setSavingContractItems] = useState(false);
   const [showServicePicker, setShowServicePicker] = useState(false);
   const [creating, setCreating] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -338,7 +343,7 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
             items:              newContract.items,
             totalAmount:        total,
             currency:           newContract.currency,
-            clientReferralRate: Number(newContract.clientReferralRate) || 5,
+            clientReferralRate: 0,
           }),
         });
 
@@ -387,7 +392,7 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
       items: newContract.items,
       total_amount: totalAmount,
       contract_currency: newContract.currency,
-      client_referral_rate: Number(newContract.clientReferralRate) || 5,
+      client_referral_rate: 0,
     });
 
     if (error) toast("error", error.message);
@@ -399,11 +404,41 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
         commissionType:"percentage", commissionValue:"", file:null,
         civility:"M.", address:"", city:"", postalCode:"", country:"",
         companyName:"", companyAddress:"", pdfMode:"auto",
-        items:[], currency:"CHF", clientReferralRate:"5",
+        items:[], currency:"CHF",
       });
       load();
     }
     setCreating(false);
+  }
+
+  // ── Contract items editing ────────────────────────────────────────
+  function startEditContractItems() {
+    setContractEditItems(selected?.items?.map(i=>({...i})) ?? []);
+    setEditingContractItems(true);
+  }
+  function updateContractEditItem(idx: number, field: keyof ContractItem, val: string | number) {
+    setContractEditItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: val } : it));
+  }
+  function addContractEditItem() {
+    setContractEditItems(prev => [...prev, { label: "", quantity: 1, unit_price: 0, currency: selected?.contract_currency ?? "CHF" }]);
+  }
+  function removeContractEditItem(idx: number) {
+    setContractEditItems(prev => prev.filter((_, i) => i !== idx));
+  }
+  async function saveContractItems() {
+    if (!selected) return;
+    const valid = contractEditItems.filter(i => i.label && i.unit_price > 0);
+    if (valid.length === 0) { toast("error", lang==="fr"?"Au moins une prestation requise":"At least one service required"); return; }
+    setSavingContractItems(true);
+    const sb = createClient();
+    const total = valid.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    const { error } = await sb.from("contracts").update({ items: valid, total_amount: total }).eq("id", selected.id);
+    if (error) { toast("error", error.message); setSavingContractItems(false); return; }
+    toast("success", lang==="fr"?"Prestations mises à jour":"Services updated");
+    setSavingContractItems(false);
+    setEditingContractItems(false);
+    setSelected(s => s ? { ...s, items: valid, total_amount: total } : s);
+    load();
   }
 
   const clientName = (c: Contract) =>
@@ -641,6 +676,119 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
               </div>
             )}
           </div>
+
+          {/* ── Prestations / Services ────────────────────────── */}
+          {(selected.items && selected.items.length > 0) || editingContractItems ? (
+            <div className="rounded-2xl border border-white/8 bg-white/3 overflow-hidden">
+              <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-white">{lang==="fr"?"Prestations":"Services"}</p>
+                  {selected.total_amount != null && !editingContractItems && (
+                    <p className="text-xs text-white/40">
+                      {lang==="fr"?"Total":"Total"} : {fmt(selected.total_amount)} {selected.contract_currency ?? "CHF"}
+                    </p>
+                  )}
+                </div>
+                {isAdmin && (
+                  <div className="flex items-center gap-2">
+                    {editingContractItems ? (
+                      <>
+                        <button onClick={()=>setEditingContractItems(false)}
+                          className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/50 hover:bg-white/8">
+                          {lang==="fr"?"Annuler":"Cancel"}
+                        </button>
+                        <button onClick={saveContractItems} disabled={savingContractItems}
+                          className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-50">
+                          {savingContractItems ? <Spinner size="sm"/> : <Save className="h-3 w-3"/>}
+                          {lang==="fr"?"Enregistrer":"Save"}
+                        </button>
+                      </>
+                    ) : (
+                      <button onClick={startEditContractItems}
+                        className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/50 transition-colors hover:bg-white/8 hover:text-white">
+                        <Edit2 className="h-3 w-3"/>
+                        {lang==="fr"?"Modifier":"Edit"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Column headers */}
+              <div className="grid grid-cols-12 gap-2 border-b border-white/5 px-4 py-2 text-[11px] font-medium uppercase tracking-wider text-white/30">
+                <div className="col-span-5">{lang==="fr"?"Prestation":"Service"}</div>
+                <div className="col-span-2 text-center">{lang==="fr"?"Qté":"Qty"}</div>
+                <div className="col-span-2 text-right">{lang==="fr"?"P.U.":"Unit"}</div>
+                <div className="col-span-3 text-right">Total</div>
+              </div>
+
+              {/* Items rows */}
+              {(editingContractItems ? contractEditItems : (selected.items ?? [])).map((item, idx) => (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-center border-b border-white/5 px-4 py-2.5 last:border-0">
+                  {editingContractItems ? (
+                    <>
+                      <div className="col-span-5">
+                        <input value={item.label}
+                          onChange={e => updateContractEditItem(idx, "label", e.target.value)}
+                          placeholder={lang==="fr"?"Description":"Description"}
+                          className="w-full rounded-lg border border-white/10 bg-[#16161c] px-2.5 py-1.5 text-sm text-white outline-none focus:border-white/30 placeholder:text-white/25"/>
+                      </div>
+                      <div className="col-span-2">
+                        <input type="number" value={item.quantity} min={1}
+                          onChange={e => updateContractEditItem(idx, "quantity", Number(e.target.value))}
+                          className="w-full rounded-lg border border-white/10 bg-[#16161c] px-2 py-1.5 text-center text-sm text-white outline-none focus:border-white/30"/>
+                      </div>
+                      <div className="col-span-2">
+                        <input type="number" value={item.unit_price} min={0} step={1}
+                          onChange={e => updateContractEditItem(idx, "unit_price", Number(e.target.value))}
+                          className="w-full rounded-lg border border-white/10 bg-[#16161c] px-2 py-1.5 text-right text-sm text-white outline-none focus:border-white/30"/>
+                      </div>
+                      <div className="col-span-2 text-right text-sm font-medium text-white">
+                        {fmt(item.quantity * item.unit_price)}
+                      </div>
+                      <div className="col-span-1 flex justify-end">
+                        {contractEditItems.length > 1 && (
+                          <button onClick={() => removeContractEditItem(idx)}
+                            className="flex h-6 w-6 items-center justify-center rounded text-white/25 hover:text-red-400">
+                            <X className="h-3.5 w-3.5"/>
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="col-span-5 text-sm text-white/80">{item.label}</div>
+                      <div className="col-span-2 text-center text-sm text-white/50">{item.quantity}</div>
+                      <div className="col-span-2 text-right text-sm text-white/50">{fmt(item.unit_price)}</div>
+                      <div className="col-span-3 text-right text-sm font-semibold text-white">{fmt(item.quantity * item.unit_price)}</div>
+                    </>
+                  )}
+                </div>
+              ))}
+
+              {/* Add item button (edit mode) */}
+              {editingContractItems && (
+                <div className="px-4 py-2 border-t border-white/5">
+                  <button onClick={addContractEditItem}
+                    className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300">
+                    <Plus className="h-3.5 w-3.5"/>
+                    {lang==="fr"?"Ajouter une prestation":"Add service"}
+                  </button>
+                </div>
+              )}
+
+              {/* Total row */}
+              <div className="flex items-center justify-between border-t border-white/10 px-4 py-3 bg-white/2">
+                <p className="text-sm font-semibold text-white/60">Total TTC</p>
+                <p className="text-lg font-bold text-white">
+                  {editingContractItems
+                    ? fmt(contractEditItems.reduce((s,i) => s + i.quantity * i.unit_price, 0))
+                    : fmt(selected.total_amount ?? 0)}{" "}
+                  {selected.contract_currency ?? "CHF"}
+                </p>
+              </div>
+            </div>
+          ) : null}
 
           {/* ── PDF Viewer ────────────────────────────────────── */}
           <div className="flex-1 overflow-hidden rounded-2xl border border-white/8 bg-white/3">
@@ -918,24 +1066,6 @@ export function ContractsModule({ profile }: ContractsModuleProps) {
                     </div>
                   </div>
                 )}
-              </div>
-
-              {/* Commission referral client */}
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-white/50">
-                  {lang==="fr"?"Commission recommandation client (%)":"Client referral commission (%)"}
-                </label>
-                <div className="flex items-center gap-2">
-                  <input type="number" min="0" max="100" step="0.5"
-                    value={newContract.clientReferralRate}
-                    onChange={e=>setNewContract(n=>({...n,clientReferralRate:e.target.value}))}
-                    className="w-24 rounded-xl border border-white/10 bg-[#16161c] px-4 py-2.5 text-sm text-white outline-none focus:border-white/30"/>
-                  <p className="text-xs text-white/30">
-                    {lang==="fr"
-                      ?"Versée si le client recommande un nouveau client (Article 6 du contrat)"
-                      :"Paid if client refers a new client (Article 6 of contract)"}
-                  </p>
-                </div>
               </div>
 
               {/* PDF Mode toggle */}
